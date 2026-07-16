@@ -596,7 +596,13 @@ fxMesaCreateContext(GLuint win,
     fxMesa->maxPendingSwapBuffers = 2;
  }
 
- if ((str = Glide->grGetRegistryOrEnvironmentStringExt("FX_GLIDE_SWAPINTERVAL"))) {
+ /* [retro3dfx] read the swap interval from the PROCESS env with our own CRT,
+  * not via Glide's grGetRegistryOrEnvironmentStringExt: when the user set
+  * nothing, that callback returns Glide's own vsync-on default, so the
+  * else-branch (interval 0) never ran - measured cost up to 32% at
+  * fillrate-bound resolutions (Q3 1024x768: 38.7 vs 51.3 fps, Voodoo3).
+  * An explicit user environment value still wins. */
+ if ((str = getenv("FX_GLIDE_SWAPINTERVAL"))) {
     fxMesa->swapInterval = atoi(str);
  } else {
     fxMesa->swapInterval = 0;
@@ -665,7 +671,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.5]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.6]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
