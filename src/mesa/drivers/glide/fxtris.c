@@ -1004,9 +1004,12 @@ static void fx_render_vb_triangles( GLcontext *ctx,
 
    INIT(GL_TRIANGLES);
 
-   for (j=start+2; j<count; j+=3) {
-      grDrawTriangle(fxVB + (j-2), fxVB + (j-1), fxVB + j);
-   }
+   /* [retro3dfx] one FIFO-batched Glide call instead of one grDrawTriangle
+    * DLL call per triangle (same pattern the strip path below already uses). */
+   j = (count - start) / 3 * 3;
+   if (j)
+      grDrawVertexArrayContiguous( GR_TRIANGLES, j,
+                                   fxVB + start, sizeof(GrVertex));
 }
 
 
@@ -1209,13 +1212,42 @@ static void (*fx_render_tab_verts[GL_POLYGON+2])(GLcontext *,
 
 
 
+/* [retro3dfx] batched indexed triangles: build a pointer array and make ONE
+ * grDrawVertexArray(GR_TRIANGLES, ...) call per chunk instead of one
+ * grDrawTriangle DLL call per triangle. Q3's world surfaces come through
+ * here (glDrawElements/GL_TRIANGLES under compiled vertex arrays). */
+#define FX_ELT_CHUNK 768   /* verts per chunk; multiple of 3 */
+static void fx_render_triangles_elts_batched( GLcontext *ctx, GLuint start,
+                                              GLuint count, GLuint flags )
+{
+   fxMesaContext fxMesa = FX_CONTEXT(ctx);
+   GrVertex *vertptr = fxMesa->verts;
+   const GLuint * const elt = TNL_CONTEXT(ctx)->vb.Elts;
+   static void *ptrs[FX_ELT_CHUNK];
+   GLuint j = start;
+   GLuint end = start + (count - start) / 3 * 3;
+   (void) flags;
+
+   fxRenderPrimitive( ctx, GL_TRIANGLES );
+
+   while (j < end) {
+      GLuint n = (end - j > FX_ELT_CHUNK) ? FX_ELT_CHUNK : (end - j);
+      GLuint i;
+      for (i = 0; i < n; i++)
+         ptrs[i] = vertptr + elt[j + i];
+      grDrawVertexArray(GR_TRIANGLES, n, ptrs);
+      j += n;
+   }
+}
+
+
 /**********************************************************************/
 /*                   Render clipped primitives                        */
 /**********************************************************************/
 
 
 
-static void fxRenderClippedPoly( GLcontext *ctx, const GLuint *elts, 
+static void fxRenderClippedPoly( GLcontext *ctx, const GLuint *elts,
 				   GLuint n )
 {
    fxMesaContext fxMesa = FX_CONTEXT(ctx);
@@ -1539,6 +1571,9 @@ void fxDDInitTriFuncs( GLcontext *ctx )
 
    if (firsttime) {
       init_rast_tab();
+      /* [retro3dfx] swap in the batched indexed-triangle renderer (one
+       * grDrawVertexArray call per chunk vs one DLL call per triangle). */
+      fx_render_tab_elts[GL_TRIANGLES] = fx_render_triangles_elts_batched;
       firsttime = 0;
    }
 
