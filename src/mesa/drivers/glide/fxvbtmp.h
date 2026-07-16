@@ -28,6 +28,25 @@
  */
 
 
+#ifndef FX_PACK_UBYTE
+#if defined(__SSE__)
+/* Branchless float[0,1] -> ubyte. UNCLAMPED_FLOAT_TO_UBYTE's float-store/
+ * byte-reload is a guaranteed store-forwarding failure (~10 cyc on P3/P6)
+ * plus two branches per component; with -mfpmath=sse this compiles to
+ * mulss/minss/maxss/cvttss2si with no memory round-trip. [retro3dfx] */
+static __inline__ GLubyte fx_pack_ub(GLfloat f)
+{
+   f = f * 255.0f + 0.5f;
+   if (f > 255.0f) f = 255.0f;   /* minss */
+   if (f < 0.0f)   f = 0.0f;     /* maxss */
+   return (GLubyte)(GLint)f;     /* cvttss2si */
+}
+#define FX_PACK_UBYTE(dst, f) dst = fx_pack_ub(f)
+#else
+#define FX_PACK_UBYTE(dst, f) UNCLAMPED_FLOAT_TO_UBYTE(dst, f)
+#endif
+#endif
+
 #define VIEWPORT_X(dst,x) dst = s[0]  * x + s[12]
 #define VIEWPORT_Y(dst,y) dst = s[5]  * y + s[13]
 #define VIEWPORT_Z(dst,z) dst = s[10] * z + s[14]
@@ -146,11 +165,11 @@ static void TAG(emit)( GLcontext *ctx,
       }
       if (IND & SETUP_RGBA) {
 #if FX_PACKEDCOLOR
-         UNCLAMPED_FLOAT_TO_UBYTE(v->pargb[2], col[0][0]);
-         UNCLAMPED_FLOAT_TO_UBYTE(v->pargb[1], col[0][1]);
-         UNCLAMPED_FLOAT_TO_UBYTE(v->pargb[0], col[0][2]);
+         FX_PACK_UBYTE(v->pargb[2], col[0][0]);
+         FX_PACK_UBYTE(v->pargb[1], col[0][1]);
+         FX_PACK_UBYTE(v->pargb[0], col[0][2]);
          if (col_size == 4) {
-            UNCLAMPED_FLOAT_TO_UBYTE(v->pargb[3], col[0][3]);
+            FX_PACK_UBYTE(v->pargb[3], col[0][3]);
          } else {
             v->pargb[3] = 255;
          }
@@ -168,9 +187,9 @@ static void TAG(emit)( GLcontext *ctx,
       }
       if (IND & SETUP_SPEC) {
 #if FX_PACKEDCOLOR
-	 UNCLAMPED_FLOAT_TO_UBYTE(v->pspec[2], spec[0][0]);
-	 UNCLAMPED_FLOAT_TO_UBYTE(v->pspec[1], spec[0][1]);
-	 UNCLAMPED_FLOAT_TO_UBYTE(v->pspec[0], spec[0][2]);
+	 FX_PACK_UBYTE(v->pspec[2], spec[0][0]);
+	 FX_PACK_UBYTE(v->pspec[1], spec[0][1]);
+	 FX_PACK_UBYTE(v->pspec[0], spec[0][2]);
 #else  /* !FX_PACKEDCOLOR */
          CNORM(v->r1, spec[0][0]);
          CNORM(v->g1, spec[0][1]);

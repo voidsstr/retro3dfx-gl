@@ -161,8 +161,10 @@ $(X86_OBJECTS): x86/matypes.h
 x86/matypes.h: x86/gen_matypes.exe
 	$< > $@
 
+# [retro3dfx] gen_matypes runs on the BUILD host: target-only codegen flags
+# (-march/-mtune/-mfpmath for a 32-bit retro CPU) break a 64-bit host gcc.
 x86/gen_matypes.exe: x86/gen_matypes.c
-	$(HOST_CC) -o $@ $(CFLAGS) -s $<
+	$(HOST_CC) -o $@ $(filter-out -march=% -mtune=% -mfpmath=%,$(CFLAGS)) -s $<
 
 # [dBorca]
 # glapi_x86.S needs some adjustments

@@ -66,7 +66,12 @@ else
   # I love c89
   CFLAGS = -Wall
 endif
-CFLAGS += -O2 -ffast-math -mtune=$(CPU)
+# [retro3dfx] -march (not just -mtune): without it mingw gcc defaults to
+# pentiumpro x87 and every C hot loop (vertex emit, color pack) is x87 even
+# though the target has SSE1. -mfpmath=sse moves float math to scalar SSE
+# (doubles stay x87 - SSE1 has no doubles, fine on P3). -DNDEBUG drops assert()s
+# from the per-vertex paths. Requires CPU >= pentium3 for SSE codegen.
+CFLAGS += -O2 -ffast-math -march=$(CPU) -mtune=$(CPU) -mfpmath=sse -DNDEBUG
 
 export CFLAGS
 
