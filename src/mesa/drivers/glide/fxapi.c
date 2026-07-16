@@ -620,6 +620,7 @@ fxMesaCreateContext(GLuint win,
     str = "grSstWinOpen";
     goto errorhandler;
  }
+ fxSetupShadowReset();   /* [retro3dfx] fresh Glide context = fresh registers */
 
    /* screen */
    fxMesa->screen_width = FX_grSstScreenWidth();
@@ -664,7 +665,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.4]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.5]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -895,6 +896,7 @@ fxMesaMakeCurrent(fxMesaContext fxMesa)
 
    grSstSelect(fxMesa->board);
    grGlideSetState((GrState *) fxMesa->state);
+   fxSetupShadowReset();   /* [retro3dfx] SetState rewrote the real registers */
 
    _mesa_make_current(fxMesa->glCtx, fxMesa->glBuffer);
 

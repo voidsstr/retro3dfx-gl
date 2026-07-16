@@ -543,11 +543,12 @@ struct tfxMesaContext
    FxBool HaveTexUma;	/* TEXUMA */
    FxBool HaveTexus2;	/* Texus 2 - FXT1 */
    struct tdfx_glide Glide;
-   char rendererString[64];
+   char rendererString[96];
 };
 
 
 extern void fxSetupFXUnits(GLcontext *);
+extern void fxSetupShadowReset(void); /* [retro3dfx] drop Glide state shadow */
 extern void fxSetupDDPointers(GLcontext *);
 
 /* fxvb.c:

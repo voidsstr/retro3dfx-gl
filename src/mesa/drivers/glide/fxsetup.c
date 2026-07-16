@@ -38,9 +38,121 @@
 #include "conf.h"
 #endif
 
+
 #if defined(FX)
 
 #include "fxdrv.h"
+
+/* [retro3dfx] Glide state shadow cache.
+ *
+ * Every glBindTexture funnels through the fxSetupTexture* paths below, which
+ * unconditionally re-issue the full set of grTex + grCombine state calls (8-10
+ * Glide DLL calls) even when nothing changed since the last bind - Q3 alone
+ * rebinds per surface. Shadow the last value of each state register and skip
+ * the DLL call when identical. fxsetup.c is the only translation unit that
+ * issues these calls on the Win32 hardware path (fxg.c is a trace shim,
+ * glide3x_dxe.c is DJGPP-only), so a TU-local cache cannot desync.
+ * fxSetupShadowReset() must be called whenever a fresh Glide context is
+ * opened/selected (grSstWinOpen resets the real registers). */
+static struct {
+   struct { FxU32 s, t; } sh_clamp[2];
+   struct { FxU32 mn, mx; } sh_filter[2];
+   struct { FxU32 mode, blend; } sh_mip[2];
+   struct { FxU32 addr, mask, sm, lg, ar, fmt; } sh_src[2];
+   struct { FxU32 f, fac, l, o, inv; } sh_acomb, sh_ccomb;
+} fxShadow;
+
+void fxSetupShadowReset(void)
+{
+   /* 0xff fill = impossible register values, so first use always issues */
+   memset(&fxShadow, 0xff, sizeof(fxShadow));
+}
+
+static void fx_sh_grTexClampMode(GrChipID_t tmu, GrTextureClampMode_t s,
+                                 GrTextureClampMode_t t)
+{
+   if (tmu < 2 && fxShadow.sh_clamp[tmu].s == (FxU32)s
+               && fxShadow.sh_clamp[tmu].t == (FxU32)t)
+      return;
+   if (tmu < 2) { fxShadow.sh_clamp[tmu].s = s; fxShadow.sh_clamp[tmu].t = t; }
+   grTexClampMode(tmu, s, t);
+}
+
+static void fx_sh_grTexFilterMode(GrChipID_t tmu, GrTextureFilterMode_t mn,
+                                  GrTextureFilterMode_t mx)
+{
+   if (tmu < 2 && fxShadow.sh_filter[tmu].mn == (FxU32)mn
+               && fxShadow.sh_filter[tmu].mx == (FxU32)mx)
+      return;
+   if (tmu < 2) { fxShadow.sh_filter[tmu].mn = mn; fxShadow.sh_filter[tmu].mx = mx; }
+   grTexFilterMode(tmu, mn, mx);
+}
+
+static void fx_sh_grTexMipMapMode(GrChipID_t tmu, GrMipMapMode_t mode,
+                                  FxBool blend)
+{
+   if (tmu < 2 && fxShadow.sh_mip[tmu].mode == (FxU32)mode
+               && fxShadow.sh_mip[tmu].blend == (FxU32)blend)
+      return;
+   if (tmu < 2) { fxShadow.sh_mip[tmu].mode = mode; fxShadow.sh_mip[tmu].blend = blend; }
+   grTexMipMapMode(tmu, mode, blend);
+}
+
+static void fx_sh_grTexSource(GrChipID_t tmu, FxU32 startAddress,
+                              FxU32 evenOdd, GrTexInfo *info)
+{
+   if (tmu < 2 && fxShadow.sh_src[tmu].addr == startAddress
+               && fxShadow.sh_src[tmu].mask == evenOdd
+               && fxShadow.sh_src[tmu].sm  == (FxU32)info->smallLodLog2
+               && fxShadow.sh_src[tmu].lg  == (FxU32)info->largeLodLog2
+               && fxShadow.sh_src[tmu].ar  == (FxU32)info->aspectRatioLog2
+               && fxShadow.sh_src[tmu].fmt == (FxU32)info->format)
+      return;
+   if (tmu < 2) {
+      fxShadow.sh_src[tmu].addr = startAddress;
+      fxShadow.sh_src[tmu].mask = evenOdd;
+      fxShadow.sh_src[tmu].sm   = info->smallLodLog2;
+      fxShadow.sh_src[tmu].lg   = info->largeLodLog2;
+      fxShadow.sh_src[tmu].ar   = info->aspectRatioLog2;
+      fxShadow.sh_src[tmu].fmt  = info->format;
+   }
+   grTexSource(tmu, startAddress, evenOdd, info);
+}
+
+static void fx_sh_grAlphaCombine(GrCombineFunction_t f, GrCombineFactor_t fac,
+                                 GrCombineLocal_t l, GrCombineOther_t o,
+                                 FxBool inv)
+{
+   if (fxShadow.sh_acomb.f == (FxU32)f && fxShadow.sh_acomb.fac == (FxU32)fac
+       && fxShadow.sh_acomb.l == (FxU32)l && fxShadow.sh_acomb.o == (FxU32)o
+       && fxShadow.sh_acomb.inv == (FxU32)inv)
+      return;
+   fxShadow.sh_acomb.f = f; fxShadow.sh_acomb.fac = fac;
+   fxShadow.sh_acomb.l = l; fxShadow.sh_acomb.o = o; fxShadow.sh_acomb.inv = inv;
+   grAlphaCombine(f, fac, l, o, inv);
+}
+
+static void fx_sh_grColorCombine(GrCombineFunction_t f, GrCombineFactor_t fac,
+                                 GrCombineLocal_t l, GrCombineOther_t o,
+                                 FxBool inv)
+{
+   if (fxShadow.sh_ccomb.f == (FxU32)f && fxShadow.sh_ccomb.fac == (FxU32)fac
+       && fxShadow.sh_ccomb.l == (FxU32)l && fxShadow.sh_ccomb.o == (FxU32)o
+       && fxShadow.sh_ccomb.inv == (FxU32)inv)
+      return;
+   fxShadow.sh_ccomb.f = f; fxShadow.sh_ccomb.fac = fac;
+   fxShadow.sh_ccomb.l = l; fxShadow.sh_ccomb.o = o; fxShadow.sh_ccomb.inv = inv;
+   grColorCombine(f, fac, l, o, inv);
+}
+
+/* Route every later call in this file through the shadow cache. */
+#define grTexClampMode  fx_sh_grTexClampMode
+#define grTexFilterMode fx_sh_grTexFilterMode
+#define grTexMipMapMode fx_sh_grTexMipMapMode
+#define grTexSource     fx_sh_grTexSource
+#define grAlphaCombine  fx_sh_grAlphaCombine
+#define grColorCombine  fx_sh_grColorCombine
+
 #include "enums.h"
 #include "tnl.h"
 #include "tnl/t_context.h"
