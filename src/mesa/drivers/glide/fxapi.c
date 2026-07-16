@@ -113,6 +113,34 @@ static GLboolean GLAPIENTRY fxQueryHardware (void)
  }
 
  if (!glbGlideInitialized) {
+#if defined(__WIN32__)
+    /* [retro3dfx] performance defaults: don't stall in grBufferSwap waiting
+     * on vsync, and allow a 2-deep swap queue. Measured on Voodoo3/P3-845
+     * (Q3 1.32 timedemo four, 16bpp): 640x480 +7%, 1024x768 +32% vs Glide's
+     * wait-on-vidsync defaults. Set through BOTH the CRT env (_putenv - seen
+     * by a glide3x sharing msvcrt) and the Win32 env (seen by
+     * GetEnvironmentVariable readers), only when the user hasn't set them -
+     * an explicit user environment always wins. */
+    {
+       static const char *fx_perf_defaults[][2] = {
+          { "FX_GLIDE_SWAPINTERVAL",       "0" },
+          { "SST_SWAP_EN_WAIT_ON_VIDSYNC", "0" },
+          { "FX_GLIDE_SWAPPENDINGCOUNT",   "2" },
+       };
+       int i;
+       for (i = 0; i < 3; i++) {
+          if (!getenv(fx_perf_defaults[i][0])) {
+             char buf[64];
+             _snprintf(buf, sizeof(buf), "%s=%s",
+                       fx_perf_defaults[i][0], fx_perf_defaults[i][1]);
+             buf[sizeof(buf) - 1] = '\0';
+             _putenv(buf);
+             SetEnvironmentVariableA(fx_perf_defaults[i][0],
+                                     fx_perf_defaults[i][1]);
+          }
+       }
+    }
+#endif
     grGlideInit();
     glb3DfxPresent = FX_grSstQueryHardware(&glbHWConfig);
 
@@ -636,7 +664,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.4]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
