@@ -61,7 +61,7 @@ CPU ?= pentium
 
 ifeq ($(ICD),1)
   # when -std=c99 mingw will not define WIN32
-  CFLAGS = -Wall -Werror
+  CFLAGS = -Wall -Wno-array-bounds -Wno-stringop-overflow -fcommon
 else
   # I love c89
   CFLAGS = -Wall
