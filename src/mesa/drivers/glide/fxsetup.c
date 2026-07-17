@@ -504,6 +504,23 @@ fxSetupSingleTMU_NoLock(fxMesaContext fxMesa, struct gl_texture_object *tObj)
       grTexMipMapMode(GR_TMU0, ti->mmMode, ti->LODblend);
       grTexMipMapMode(GR_TMU1, ti->mmMode, ti->LODblend);
 
+      /* [retro3dfx opt/lod-bias] QUALITY: a small negative LOD bias sharpens
+       * textures on the Voodoo3 bilinear + nearest-mip path (the classic 3dfx
+       * trick), countering 16bpp softness and hiding the LOD-dither seam. The
+       * app rarely sets GL_TEXTURE_LOD_BIAS_EXT (Q3 never does), so default it.
+       * Tunable via FX_LOD_BIAS env (default -0.5); 0.0 disables. */
+      {
+         static float fx_default_lodbias = 1e30f;   /* read env once */
+         if (fx_default_lodbias > 1e29f) {
+            const char *e = getenv("FX_LOD_BIAS");
+            fx_default_lodbias = e ? (float) atof(e) : -0.5f;
+         }
+         if (fx_default_lodbias != 0.0f) {
+            grTexLodBiasValue(GR_TMU0, fx_default_lodbias);
+            grTexLodBiasValue(GR_TMU1, fx_default_lodbias);
+         }
+      }
+
       grTexSource(GR_TMU0, ti->tm[FX_TMU0]->startAddr,
 			    GR_MIPMAPLEVELMASK_ODD, &(ti->info));
       grTexSource(GR_TMU1, ti->tm[FX_TMU1]->startAddr,
@@ -535,6 +552,18 @@ fxSetupSingleTMU_NoLock(fxMesaContext fxMesa, struct gl_texture_object *tObj)
       grTexClampMode(tmu, ti->sClamp, ti->tClamp);
       grTexFilterMode(tmu, ti->minFilt, ti->maxFilt);
       grTexMipMapMode(tmu, ti->mmMode, FXFALSE);
+
+      /* [retro3dfx opt/lod-bias] default sharpening bias on the active TMU
+       * (the Voodoo3 single-TMU path; see the double-TMU block above). */
+      {
+         static float fx_default_lodbias1 = 1e30f;
+         if (fx_default_lodbias1 > 1e29f) {
+            const char *e = getenv("FX_LOD_BIAS");
+            fx_default_lodbias1 = e ? (float) atof(e) : -0.5f;
+         }
+         if (fx_default_lodbias1 != 0.0f)
+            grTexLodBiasValue(tmu, fx_default_lodbias1);
+      }
 
       grTexSource(tmu, ti->tm[tmu]->startAddr, GR_MIPMAPLEVELMASK_BOTH, &(ti->info));
    }
