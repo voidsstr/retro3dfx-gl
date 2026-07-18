@@ -1311,13 +1311,19 @@ fxDDTexImage2D(GLcontext * ctx, GLenum target, GLint level,
    tfxMipMapLevel *mml;
    GLint texelBytes, dstRowStride;
 
-   if (TDFX_DEBUG & VERBOSE_TEXTURE) {
-       fprintf(stderr, "fxDDTexImage2D: id=%d int 0x%x  format 0x%x  type 0x%x  %dx%d\n",
+   if ((TDFX_DEBUG & VERBOSE_TEXTURE) || getenv("FX_TRACE_TEX")) {
+       fprintf(stderr, "fxDDTexImage2D: id=%d int 0x%x  format 0x%x  type 0x%x  %dx%d border=%d\n",
                        texObj->Name, texImage->IntFormat, format, type,
-                       texImage->Width, texImage->Height);
+                       texImage->Width, texImage->Height, border);
+       fflush(stderr);
    }
 
    if (!fxIsTexSupported(target, internalFormat, texImage)) {
+      if (getenv("FX_TRACE_TEX")) {
+         fprintf(stderr, "fxDDTexImage2D: UNSUPPORTED int 0x%x fmt 0x%x type 0x%x %dx%d border=%d\n",
+                 internalFormat, format, type, texImage->Width, texImage->Height, border);
+         fflush(stderr);
+      }
       _mesa_problem(NULL, "fx Driver: unsupported texture in fxDDTexImg()\n");
       return;
    }
