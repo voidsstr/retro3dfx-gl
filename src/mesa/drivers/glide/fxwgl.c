@@ -323,14 +323,6 @@ wglCreateContext(HDC hdc)
         }
         Sleep(5);
      }
-     /* [retro3dfx] Some GL apps (idTech2 ref_gl) ChangeDisplaySettings the
-      * desktop into a fullscreen-exclusive mode BEFORE creating the context.
-      * On the Voodoo3 that leaves GDI holding an exclusive mode switch, and
-      * grSstWinOpen's own GDI->Glide fullscreen transition then deadlocks
-      * against it. Reset the display to its registry default first so Glide
-      * owns the mode switch cleanly (harmless when nothing changed it - Q3). */
-     ChangeDisplaySettings(NULL, 0);
-     Sleep(50);
      if (env_check("MESA_GLX_FX", 'w') && !(GetWindowLong (hWnd, GWL_STYLE) & WS_POPUP)) {
 	/* XXX todo - windowed modes */
         fprintf(stderr, "[q2diag] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
