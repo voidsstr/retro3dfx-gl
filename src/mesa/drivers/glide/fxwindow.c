@@ -113,6 +113,23 @@ fxWinMakeOffscreen(LPDIRECTDRAW dd, int w, int h)
    return s;
 }
 
+static LPDIRECTDRAWSURFACE
+fxWinMakeZBuffer(LPDIRECTDRAW dd, int w, int h)
+{
+   DDSURFACEDESC desc;
+   LPDIRECTDRAWSURFACE s = NULL;
+   memset(&desc, 0, sizeof(desc));
+   desc.dwSize  = sizeof(DDSURFACEDESC);
+   desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_ZBUFFERBITDEPTH;
+   desc.dwWidth = w;
+   desc.dwHeight = h;
+   desc.dwZBufferBitDepth = 16;
+   desc.ddsCaps.dwCaps = DDSCAPS_VIDEOMEMORY | DDSCAPS_ZBUFFER;
+   if (IDirectDraw_CreateSurface(dd, &desc, &s, NULL) != DD_OK)
+      return NULL;
+   return s;
+}
+
 /*
  * Open a windowed Glide rendering context into hWnd's client area.
  * Returns the GrContext_t on success (non-zero), or 0 on any failure (caller
@@ -152,23 +169,36 @@ fxWinOpen(fxMesaContext fxMesa, FxU32 hWnd, int w, int h, int wantAux)
       IDirectDrawSurface_SetClipper(front, clip);
    }
 
-   /* offscreen video-memory back buffer that Glide rasterizes into */
+   /* offscreen video-memory back buffer that Glide rasterizes into. Create ALL
+    * DDraw surfaces (back + Z) BEFORE engaging the Glide context: creating a
+    * DDraw surface AFTER grSurfaceSetRendering faults (Glide has taken the board
+    * memory), so allocate everything up front. */
    back = fxWinMakeOffscreen(dd, w, h);
    if (!back) { fxWinLog("  CreateSurface(BACK vidmem/3ddevice 565) FAILED\n"); goto fail; }
    fxWinLog("  back ok back=%p\n", (void*)back);
+
+   if (wantAux && !getenv("FX_WINDOWED_NOAUX")) {
+      /* aux (depth) is a plain 16-bit surface, same format as the color back
+       * buffer -- that's what grSurfaceSetAux expects (win32_ddsurf.cpp), NOT a
+       * DDSCAPS_ZBUFFER surface (which crashes grSurfaceSetAux). */
+      aux = getenv("FX_WINDOWED_ZAUX") ? fxWinMakeZBuffer(dd, w, h)
+                                       : fxWinMakeOffscreen(dd, w, h);
+      fxWinLog("  aux surface -> %p\n", (void*)aux);
+   }
 
    /* create the windowed Glide context and point it at our surfaces */
    gctx = p_grSurfaceCreateContext(FXWIN_CTX_WINDOWED);
    fxWinLog("  grSurfaceCreateContext -> %lx\n", (unsigned long)gctx);
    if (!gctx) goto fail;
    grSelectContext(gctx);
+   fxWinLog("  grSelectContext ok\n");
    p_grSurfaceSetRendering((void*)back);
-
-   if (wantAux) {
-      aux = fxWinMakeOffscreen(dd, w, h);   /* 16-bit depth surface */
-      if (aux && p_grSurfaceSetAux)
-         p_grSurfaceSetAux((void*)aux);
+   fxWinLog("  grSurfaceSetRendering(back) ok\n");
+   if (aux && p_grSurfaceSetAux) {
+      p_grSurfaceSetAux((void*)aux);
+      fxWinLog("  grSurfaceSetAux(aux) ok\n");
    }
+   fxWinLog("  fxWinOpen SUCCESS ctx=%lx\n", (unsigned long)gctx);
 
    fxMesa->windowed = GL_TRUE;
    fxMesa->winDDObj  = (void*)dd;
