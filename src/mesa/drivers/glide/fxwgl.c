@@ -835,8 +835,12 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
   /* QUAKE2: 24+32 */
   /* GORE  : 24+16 */
   if ((pfd.cColorBits == 24) || (pfd.cColorBits == 32)) {
-     /* the first 2 entries are 16bit */
-     pfd.cColorBits = (qt_valid_pix > 2) ? 32 : 16;
+     /* [retro3dfx] Remap a 24/32-bit request to what the card actually has:
+      * 32-bit only on Napalm (Voodoo4/5), else 16-bit. This used to test
+      * `qt_valid_pix > 2`, but once we expose the V3 alpha PFDs (tablen 2->4)
+      * that heuristic wrongly reports "has 32-bit" on a Voodoo3 and remaps Q2's
+      * request to a nonexistent 32-bit format. Test the board type directly. */
+     pfd.cColorBits = (fxMesaSelectCurrentBoard(0) >= GR_SSTTYPE_Voodoo4) ? 32 : 16;
   }
   if (pfd.cColorBits == 32) {
      pfd.cDepthBits = 24;
