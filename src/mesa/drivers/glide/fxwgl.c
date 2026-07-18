@@ -298,7 +298,21 @@ wglCreateContext(HDC hdc)
 
    /* always log when debugging, or if user demands */
    if (TDFX_DEBUG || env_check("MESA_FX_INFO", 'r')) {
-      freopen("MESA.LOG", "w", stderr);
+      /* [retro3dfx] Write to a guaranteed-writable temp path, not the process
+       * CWD: under Program Files on XP the CWD is read-only for a limited user,
+       * and a failed freopen() CLOSES stderr per the C standard — every later
+       * fprintf(stderr,...) then writes to a dead stream. Build %TEMP%\MESA.LOG
+       * and only redirect if it actually opened. See REVIEW-FINDINGS.md B1. */
+      char logpath[MAX_PATH];
+      DWORD n = GetTempPathA(sizeof(logpath), logpath);
+      if (n == 0 || n >= sizeof(logpath) - 12) {
+         logpath[0] = '\0';
+      }
+      strcat(logpath, "MESA.LOG");
+      if (!freopen(logpath, "w", stderr)) {
+         /* fall back to the game dir; if that also fails, leave stderr intact */
+         freopen("MESA.LOG", "w", stderr);
+      }
    }
 
    {
@@ -325,18 +339,21 @@ wglCreateContext(HDC hdc)
      }
      if (env_check("MESA_GLX_FX", 'w') && !(GetWindowLong (hWnd, GWL_STYLE) & WS_POPUP)) {
 	/* XXX todo - windowed modes */
-        fprintf(stderr, "[retro3dfx] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
-                (void*)hWnd, (int)pix[curPFD-1].mesaAttr[0]); fflush(stderr);
+        if (TDFX_DEBUG & VERBOSE_DRIVER)
+           fprintf(stderr, "[retro3dfx] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
+                   (void*)hWnd, (int)pix[curPFD-1].mesaAttr[0]);
         error = !(ctx = fxMesaCreateContext((GLuint) hWnd, GR_RESOLUTION_NONE, GR_REFRESH_NONE, pix[curPFD - 1].mesaAttr));
-        fprintf(stderr, "[retro3dfx] post fxMesaCreateContext ctx=%p\n", (void*)ctx); fflush(stderr);
+        if (TDFX_DEBUG & VERBOSE_DRIVER)
+           fprintf(stderr, "[retro3dfx] post fxMesaCreateContext ctx=%p\n", (void*)ctx);
      } else {
         GetClientRect(hWnd, &cliRect);
-        fprintf(stderr, "[retro3dfx] pre fxMesaCreateBestContext hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
-                (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
-                (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
-        fflush(stderr);
+        if (TDFX_DEBUG & VERBOSE_DRIVER)
+           fprintf(stderr, "[retro3dfx] pre fxMesaCreateBestContext hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
+                   (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
+                   (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
         error = !(ctx = fxMesaCreateBestContext((GLuint) hWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
-        fprintf(stderr, "[retro3dfx] post fxMesaCreateBestContext ctx=%p\n", (void*)ctx); fflush(stderr);
+        if (TDFX_DEBUG & VERBOSE_DRIVER)
+           fprintf(stderr, "[retro3dfx] post fxMesaCreateBestContext ctx=%p\n", (void*)ctx);
      }
    }
 
@@ -753,7 +770,11 @@ wglUseFontBitmaps_FX(HDC fontDevice, DWORD firstChar, DWORD numChars,
 GLAPI BOOL GLAPIENTRY
 wglUseFontBitmapsW(HDC hdc, DWORD first, DWORD count, DWORD listBase)
 {
-   return (FALSE);
+   /* [retro3dfx] Delegate to the working ANSI implementation. Unicode-compiled
+    * engines call the W export for console/HUD text; returning FALSE left their
+    * display lists empty (missing text, or a crash when glCallLists hits unset
+    * lists). The GDI glyph path is identical for both. See REVIEW-FINDINGS.md B1. */
+   return wglUseFontBitmapsA(hdc, first, count, listBase);
 }
 
 GLAPI BOOL GLAPIENTRY
@@ -791,8 +812,14 @@ wglSwapLayerBuffers(HDC hdc, UINT fuPlanes)
 static int pfd_tablen (void)
 {
  /* we should take an envvar for `fxMesaSelectCurrentBoard' */
+ /* [retro3dfx] Pre-Napalm (Voodoo3/Banshee) has no 32-bit framebuffer, so the
+  * two 32-bit ARGB8888 entries (pix[4]/pix[5]) stay hidden — but it DOES support
+  * the 16-bit ARGB1555 formats (pix[2]/pix[3]). Exposing them (4, not 2) lets
+  * games that request an alpha buffer (SDL/GLFW default to 8 destination-alpha
+  * bits; the matcher hard-rejects cAlphaBits>0 with no alpha PFD) actually create
+  * a context instead of failing outright. See retro3dfx/REVIEW-FINDINGS.md A1. */
  return (fxMesaSelectCurrentBoard(0) < GR_SSTTYPE_Voodoo4)
-        ? 2                               /* only 16bit entries */
+        ? 4                               /* RGB565 + ARGB1555 (alpha) 16bit entries */
         : sizeof(pix) / sizeof(pix[0]);   /* full table */
 }
 

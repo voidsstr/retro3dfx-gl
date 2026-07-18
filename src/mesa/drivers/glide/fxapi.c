@@ -40,6 +40,7 @@
 #endif
 
 #if defined(FX)
+#include <math.h>
 #include "fxdrv.h"
 
 #include "drivers/common/driverfuncs.h"
@@ -608,11 +609,13 @@ fxMesaCreateContext(GLuint win,
     fxMesa->swapInterval = 0;
  }
 
- fprintf(stderr, "[retro3dfx] pre grSstWinOpen win=%lx res=%d ref=%d HavePixExt=%d pixFmt=%d aux=%d "
-                 "vis=%d fg=%d\n",
-         (unsigned long)win, (int)res, (int)ref, (int)fxMesa->HavePixExt, (int)pixFmt, (int)aux,
-         (int)IsWindowVisible((HWND)(UINT_PTR)win),
-         (int)(GetForegroundWindow() == (HWND)(UINT_PTR)win)); fflush(stderr);
+ if (TDFX_DEBUG & VERBOSE_DRIVER) {
+    fprintf(stderr, "[retro3dfx] pre grSstWinOpen win=%lx res=%d ref=%d HavePixExt=%d pixFmt=%d aux=%d "
+                    "vis=%d fg=%d\n",
+            (unsigned long)win, (int)res, (int)ref, (int)fxMesa->HavePixExt, (int)pixFmt, (int)aux,
+            (int)IsWindowVisible((HWND)(UINT_PTR)win),
+            (int)(GetForegroundWindow() == (HWND)(UINT_PTR)win)); fflush(stderr);
+ }
  BEGIN_BOARD_LOCK();
  if (fxMesa->HavePixExt) {
     fxMesa->glideContext = Glide->grSstWinOpenExt((FxU32)win, res, ref,
@@ -627,12 +630,48 @@ fxMesaCreateContext(GLuint win,
     fxMesa->glideContext = 0;
  }
  END_BOARD_LOCK();
- fprintf(stderr, "[retro3dfx] post grSstWinOpen ctx=%p\n", (void*)fxMesa->glideContext); fflush(stderr);
+ if (TDFX_DEBUG & VERBOSE_DRIVER) {
+    fprintf(stderr, "[retro3dfx] post grSstWinOpen ctx=%p\n", (void*)fxMesa->glideContext); fflush(stderr);
+ }
  if (!fxMesa->glideContext) {
     str = "grSstWinOpen";
     goto errorhandler;
  }
  fxSetupShadowReset();   /* [retro3dfx] fresh Glide context = fresh registers */
+
+ /* [retro3dfx] Quality defaults the stock init never sets (both free on this
+  * present-bound card — see retro3dfx/REVIEW-FINDINGS.md):
+  *  - Gamma: nothing else loads a gamma ramp, so 16-bit output looks dark. Load
+  *    a pow(1/g) ramp (default g=1.3, env FX_GAMMA, "1.0"/"0" = identity/off).
+  *    The DAC ramp is global; fxMesaDestroyContext restores identity.
+  *  - Dither: Glide resets to GR_DITHER_2x2 (GSST.C), and Mesa only sets 4x4 on a
+  *    live glEnable(GL_DITHER) transition, so games that never toggle it band at
+  *    2x2. Force 4x4 once here (env FX_DITHER=0 keeps the 2x2 default). */
+ {
+    const char *gs = getenv("FX_GAMMA");
+    double g = gs ? atof(gs) : 1.3;
+    if (g >= 0.1 && g != 1.0) {
+       FxU32 rr[256], gg[256], bb[256];
+       int n = FX_grGetInteger(GR_GAMMA_TABLE_ENTRIES);
+       int inc, i, idx;
+       if (n <= 0 || n > 256) n = 256;
+       inc = 256 / n;
+       for (i = 0, idx = 0; i < n; i++, idx += inc) {
+          int v = (int)(pow((double)idx / 255.0, 1.0 / g) * 255.0 + 0.5);
+          if (v > 255) v = 255; if (v < 0) v = 0;
+          rr[i] = gg[i] = bb[i] = (FxU32)v;
+       }
+       BEGIN_BOARD_LOCK();
+       grLoadGammaTable(n, rr, gg, bb);
+       END_BOARD_LOCK();
+       fxMesa->haveDefaultGamma = GL_TRUE;
+    }
+    if (!getenv("FX_DITHER") || atoi(getenv("FX_DITHER")) != 0) {
+       BEGIN_BOARD_LOCK();
+       grDitherMode(GR_DITHER_4x4);
+       END_BOARD_LOCK();
+    }
+ }
 
    /* screen */
    fxMesa->screen_width = FX_grSstScreenWidth();
@@ -677,7 +716,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.19]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.20]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -849,6 +888,22 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
               (unsigned) st.aFuncFail);
       fprintf(stderr, "  # pixels drawn (including buffer clears and LFB writes): %u\n",
               (unsigned) st.pixelsOut);
+   }
+
+   /* [retro3dfx] restore an identity DAC gamma ramp if we loaded a non-identity
+    * one at context create — the ramp is global, so leaving it would brighten
+    * the desktop after the game exits. */
+   if (fxMesa->haveDefaultGamma) {
+      FxU32 rr[256], gg[256], bb[256];
+      int n = FX_grGetInteger(GR_GAMMA_TABLE_ENTRIES);
+      int inc, i, idx;
+      if (n <= 0 || n > 256) n = 256;
+      inc = 256 / n;
+      for (i = 0, idx = 0; i < n; i++, idx += inc)
+         rr[i] = gg[i] = bb[i] = (FxU32)idx;
+      BEGIN_BOARD_LOCK();
+      grLoadGammaTable(n, rr, gg, bb);
+      END_BOARD_LOCK();
    }
 
    /* close the hardware first,

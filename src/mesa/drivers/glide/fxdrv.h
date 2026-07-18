@@ -510,6 +510,7 @@ struct tfxMesaContext
    /* Options */
 
    GLboolean verbose;
+   GLboolean haveDefaultGamma;	/* [retro3dfx] we loaded a non-identity gamma ramp -> restore on destroy */
    GLboolean haveTwoTMUs;	/* True if we really have 2 tmu's  */
    GLboolean haveHwAlpha;
    GLboolean haveHwStencil;
