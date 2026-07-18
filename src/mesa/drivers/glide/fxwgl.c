@@ -325,18 +325,18 @@ wglCreateContext(HDC hdc)
      }
      if (env_check("MESA_GLX_FX", 'w') && !(GetWindowLong (hWnd, GWL_STYLE) & WS_POPUP)) {
 	/* XXX todo - windowed modes */
-        fprintf(stderr, "[q2diag] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
+        fprintf(stderr, "[retro3dfx] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
                 (void*)hWnd, (int)pix[curPFD-1].mesaAttr[0]); fflush(stderr);
         error = !(ctx = fxMesaCreateContext((GLuint) hWnd, GR_RESOLUTION_NONE, GR_REFRESH_NONE, pix[curPFD - 1].mesaAttr));
-        fprintf(stderr, "[q2diag] post fxMesaCreateContext ctx=%p\n", (void*)ctx); fflush(stderr);
+        fprintf(stderr, "[retro3dfx] post fxMesaCreateContext ctx=%p\n", (void*)ctx); fflush(stderr);
      } else {
         GetClientRect(hWnd, &cliRect);
-        fprintf(stderr, "[q2diag] pre fxMesaCreateBestContext hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
+        fprintf(stderr, "[retro3dfx] pre fxMesaCreateBestContext hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
                 (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
                 (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
         fflush(stderr);
         error = !(ctx = fxMesaCreateBestContext((GLuint) hWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
-        fprintf(stderr, "[q2diag] post fxMesaCreateBestContext ctx=%p\n", (void*)ctx); fflush(stderr);
+        fprintf(stderr, "[retro3dfx] post fxMesaCreateBestContext ctx=%p\n", (void*)ctx); fflush(stderr);
      }
    }
 

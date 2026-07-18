@@ -608,7 +608,7 @@ fxMesaCreateContext(GLuint win,
     fxMesa->swapInterval = 0;
  }
 
- fprintf(stderr, "[q2diag] pre grSstWinOpen win=%lx res=%d ref=%d HavePixExt=%d pixFmt=%d aux=%d "
+ fprintf(stderr, "[retro3dfx] pre grSstWinOpen win=%lx res=%d ref=%d HavePixExt=%d pixFmt=%d aux=%d "
                  "vis=%d fg=%d\n",
          (unsigned long)win, (int)res, (int)ref, (int)fxMesa->HavePixExt, (int)pixFmt, (int)aux,
          (int)IsWindowVisible((HWND)(UINT_PTR)win),
@@ -627,7 +627,7 @@ fxMesaCreateContext(GLuint win,
     fxMesa->glideContext = 0;
  }
  END_BOARD_LOCK();
- fprintf(stderr, "[q2diag] post grSstWinOpen ctx=%p\n", (void*)fxMesa->glideContext); fflush(stderr);
+ fprintf(stderr, "[retro3dfx] post grSstWinOpen ctx=%p\n", (void*)fxMesa->glideContext); fflush(stderr);
  if (!fxMesa->glideContext) {
     str = "grSstWinOpen";
     goto errorhandler;
@@ -677,7 +677,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.17]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.18]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
