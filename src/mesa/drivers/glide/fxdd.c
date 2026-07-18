@@ -1850,14 +1850,22 @@ fxDDInitExtensions(GLcontext * ctx)
 
    _mesa_enable_extension(ctx, "GL_ARB_point_sprite");
    _mesa_enable_extension(ctx, "GL_EXT_point_parameters");
-   _mesa_enable_extension(ctx, "GL_EXT_paletted_texture");
+   /* [retro3dfx] The Glide paletted-texture path (glColorTableEXT +
+    * GL_COLOR_INDEX8 uploads) is incomplete for some engines' usage
+    * (GoldSrc/Half-Life uploads 8-bit paletted lightmapped world textures and
+    * faults). FX_NO_PALETTED_TEXTURE=1 hides these two extensions so such an
+    * engine falls back to the RGBA texture path (the same one Q2/Q3 use), which
+    * is solid. Left ON by default to preserve behaviour for apps that work. */
+   if (!getenv("FX_NO_PALETTED_TEXTURE")) {
+      _mesa_enable_extension(ctx, "GL_EXT_paletted_texture");
+      _mesa_enable_extension(ctx, "GL_EXT_shared_texture_palette");
+   }
    _mesa_enable_extension(ctx, "GL_EXT_texture_lod_bias");
-   _mesa_enable_extension(ctx, "GL_EXT_shared_texture_palette");
    _mesa_enable_extension(ctx, "GL_EXT_blend_func_separate");
    _mesa_enable_extension(ctx, "GL_EXT_texture_env_add");
    _mesa_enable_extension(ctx, "GL_EXT_stencil_wrap");
 
-   if (fxMesa->haveTwoTMUs) {
+   if (fxMesa->haveTwoTMUs && !getenv("FX_NO_MULTITEXTURE")) {
       _mesa_enable_extension(ctx, "GL_ARB_multitexture");
    }
 
