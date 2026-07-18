@@ -1865,7 +1865,7 @@ fxDDInitExtensions(GLcontext * ctx)
    _mesa_enable_extension(ctx, "GL_EXT_texture_env_add");
    _mesa_enable_extension(ctx, "GL_EXT_stencil_wrap");
 
-   if (fxMesa->haveTwoTMUs) {
+   if (fxMesa->haveTwoTMUs && !getenv("FX_NO_MULTITEXTURE")) {
       _mesa_enable_extension(ctx, "GL_ARB_multitexture");
    }
 
