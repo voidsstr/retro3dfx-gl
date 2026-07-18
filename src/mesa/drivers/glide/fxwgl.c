@@ -303,9 +303,26 @@ wglCreateContext(HDC hdc)
 
    {
      RECT cliRect;
+     MSG pumpMsg;
+     int pumpI;
      ShowWindow(hWnd, SW_SHOWNORMAL);
      SetForegroundWindow(hWnd);
+     SetActiveWindow(hWnd);
      Sleep(100); /* a hack for win95 */
+     /* [retro3dfx] Drain the window's pending messages before Glide takes the
+      * board. A freshly-shown window (idTech2 ref_gl) still has its activation
+      * messages queued; grSstWinOpen's DirectDraw SetCooperativeLevel(EXCLUSIVE
+      * | FULLSCREEN) blocks until the window is really foreground/active, so if
+      * the game thread enters grSstWinOpen without pumping, it deadlocks. Q3's
+      * window is already settled, which is why it never hit this. Pump so the
+      * WM_ACTIVATE/WM_SETFOCUS get dispatched and the window is truly active. */
+     for (pumpI = 0; pumpI < 40; pumpI++) {
+        while (PeekMessage(&pumpMsg, NULL, 0, 0, PM_REMOVE)) {
+           TranslateMessage(&pumpMsg);
+           DispatchMessage(&pumpMsg);
+        }
+        Sleep(5);
+     }
      if (env_check("MESA_GLX_FX", 'w') && !(GetWindowLong (hWnd, GWL_STYLE) & WS_POPUP)) {
 	/* XXX todo - windowed modes */
         fprintf(stderr, "[q2diag] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
