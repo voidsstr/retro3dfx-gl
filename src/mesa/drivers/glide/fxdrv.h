@@ -511,6 +511,15 @@ struct tfxMesaContext
 
    GLboolean verbose;
    GLboolean haveDefaultGamma;	/* [retro3dfx] we loaded a non-identity gamma ramp -> restore on destroy */
+   /* [retro3dfx] windowed-Glide rendering (DDraw cooperative surface + Blt present),
+    * for desktop-fullscreen engines (GoldSrc/Half-Life/CS) that own the mode via
+    * ChangeDisplaySettings and conflict with grSstWinOpen's exclusive board grab.
+    * void* to avoid pulling ddraw.h into this header (see fxwindow.c). */
+   GLboolean windowed;
+   void *winDDObj;		/* LPDIRECTDRAW */
+   void *winFront, *winBack, *winAux, *winClip;
+   unsigned long winHwnd;	/* HWND */
+   int winW, winH;
    GLboolean haveTwoTMUs;	/* True if we really have 2 tmu's  */
    GLboolean haveHwAlpha;
    GLboolean haveHwStencil;
@@ -550,6 +559,14 @@ struct tfxMesaContext
 
 extern void fxSetupFXUnits(GLcontext *);
 extern void fxSetupShadowReset(void); /* [retro3dfx] drop Glide state shadow */
+
+/* [retro3dfx] windowed-Glide rendering (fxwindow.c) */
+#if defined(__WIN32__)
+extern GrContext_t fxWinOpen(fxMesaContext fxMesa, FxU32 hWnd, int w, int h, int wantAux);
+extern void fxWinSwap(fxMesaContext fxMesa);
+extern void fxWinClose(fxMesaContext fxMesa);
+extern void fxMesaRequestWindowed(int w, int h);  /* fxapi.c; set before create */
+#endif
 extern void fxSetupDDPointers(GLcontext *);
 
 /* fxvb.c:

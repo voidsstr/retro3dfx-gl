@@ -337,24 +337,23 @@ wglCreateContext(HDC hdc)
         }
         Sleep(5);
      }
-     if (env_check("MESA_GLX_FX", 'w') && !(GetWindowLong (hWnd, GWL_STYLE) & WS_POPUP)) {
-	/* XXX todo - windowed modes */
-        if (TDFX_DEBUG & VERBOSE_DRIVER)
-           fprintf(stderr, "[retro3dfx] pre fxMesaCreateContext(windowed) hWnd=%p attr0=%d\n",
-                   (void*)hWnd, (int)pix[curPFD-1].mesaAttr[0]);
-        error = !(ctx = fxMesaCreateContext((GLuint) hWnd, GR_RESOLUTION_NONE, GR_REFRESH_NONE, pix[curPFD - 1].mesaAttr));
-        if (TDFX_DEBUG & VERBOSE_DRIVER)
-           fprintf(stderr, "[retro3dfx] post fxMesaCreateContext ctx=%p\n", (void*)ctx);
-     } else {
         GetClientRect(hWnd, &cliRect);
+        /* [retro3dfx] Opt-in windowed-Glide rendering (FX_WINDOWED=1, or the
+         * legacy MESA_GLX_FX=window). Needed by desktop-fullscreen engines
+         * (GoldSrc/Half-Life/CS) whose own ChangeDisplaySettings collides with
+         * grSstWinOpen's exclusive mode. Request it here; fxMesaCreateContext
+         * uses the DDraw offscreen+Blt path and silently falls back to the
+         * fullscreen path if the surface API isn't available, so Q2/Q3/UT (which
+         * don't set the env) are unaffected. */
+        if (env_check("FX_WINDOWED", '1') || env_check("MESA_GLX_FX", 'w'))
+           fxMesaRequestWindowed(cliRect.right, cliRect.bottom);
         if (TDFX_DEBUG & VERBOSE_DRIVER)
-           fprintf(stderr, "[retro3dfx] pre fxMesaCreateBestContext hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
+           fprintf(stderr, "[retro3dfx] pre create hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
                    (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
                    (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
         error = !(ctx = fxMesaCreateBestContext((GLuint) hWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
         if (TDFX_DEBUG & VERBOSE_DRIVER)
-           fprintf(stderr, "[retro3dfx] post fxMesaCreateBestContext ctx=%p\n", (void*)ctx);
-     }
+           fprintf(stderr, "[retro3dfx] post create ctx=%p\n", (void*)ctx);
    }
 
    if (error) {

@@ -116,7 +116,8 @@ endif
 ifeq ($(FX),1)
 DRIVER_SOURCES = \
 	$(GLIDE_DRIVER_SOURCES) \
-	drivers/glide/fxwgl.c
+	drivers/glide/fxwgl.c \
+	drivers/glide/fxwindow.c
 else
 ifeq ($(ICD),1)
 DRIVER_SOURCES = \

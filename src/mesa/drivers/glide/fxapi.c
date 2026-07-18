@@ -63,6 +63,13 @@ int TDFX_DEBUG = (0
 
 static fxMesaContext fxMesaCurrentCtx = NULL;
 
+/* [retro3dfx] windowed-render request: wglCreateContext's windowed branch calls
+ * fxMesaRequestWindowed(w,h) just before fxMesaCreateContext; the create path
+ * consumes and clears it, and falls back to fullscreen grSstWinOpen if the
+ * windowed surface path is unavailable. */
+static int fxWinReq = 0, fxWinReqW = 0, fxWinReqH = 0;
+void fxMesaRequestWindowed(int w, int h) { fxWinReq = 1; fxWinReqW = w; fxWinReqH = h; }
+
 /*
  * Status of 3Dfx hardware initialization
  */
@@ -616,22 +623,38 @@ fxMesaCreateContext(GLuint win,
             (int)IsWindowVisible((HWND)(UINT_PTR)win),
             (int)(GetForegroundWindow() == (HWND)(UINT_PTR)win)); fflush(stderr);
  }
- BEGIN_BOARD_LOCK();
- if (fxMesa->HavePixExt) {
-    fxMesa->glideContext = Glide->grSstWinOpenExt((FxU32)win, res, ref,
-                                                  GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
-                                                  pixFmt,
-                                                  2, aux);
- } else if (pixFmt == GR_PIXFMT_RGB_565) {
-    fxMesa->glideContext = grSstWinOpen((FxU32)win, res, ref,
-                                        GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
-                                        2, aux);
- } else {
-    fxMesa->glideContext = 0;
+#if defined(__WIN32__)
+ /* [retro3dfx] windowed render path first, if the caller asked for it. Falls
+  * through to fullscreen grSstWinOpen if unavailable (fxWinOpen returns 0). */
+ if (fxWinReq) {
+    int wReqW = fxWinReqW, wReqH = fxWinReqH;
+    fxWinReq = 0;
+    BEGIN_BOARD_LOCK();
+    fxMesa->glideContext = fxWinOpen(fxMesa, (FxU32)win, wReqW, wReqH, aux ? 1 : 0);
+    END_BOARD_LOCK();
+    if (!fxMesa->glideContext && (TDFX_DEBUG & VERBOSE_DRIVER))
+       fprintf(stderr, "[retro3dfx] windowed open failed; falling back to fullscreen\n");
  }
- END_BOARD_LOCK();
+#endif
+ if (!fxMesa->glideContext) {
+    BEGIN_BOARD_LOCK();
+    if (fxMesa->HavePixExt) {
+       fxMesa->glideContext = Glide->grSstWinOpenExt((FxU32)win, res, ref,
+                                                     GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
+                                                     pixFmt,
+                                                     2, aux);
+    } else if (pixFmt == GR_PIXFMT_RGB_565) {
+       fxMesa->glideContext = grSstWinOpen((FxU32)win, res, ref,
+                                           GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
+                                           2, aux);
+    } else {
+       fxMesa->glideContext = 0;
+    }
+    END_BOARD_LOCK();
+ }
  if (TDFX_DEBUG & VERBOSE_DRIVER) {
-    fprintf(stderr, "[retro3dfx] post grSstWinOpen ctx=%p\n", (void*)fxMesa->glideContext); fflush(stderr);
+    fprintf(stderr, "[retro3dfx] post board-open ctx=%p windowed=%d\n",
+            (void*)fxMesa->glideContext, (int)fxMesa->windowed); fflush(stderr);
  }
  if (!fxMesa->glideContext) {
     str = "grSstWinOpen";
@@ -674,8 +697,18 @@ fxMesaCreateContext(GLuint win,
  }
 
    /* screen */
-   fxMesa->screen_width = FX_grSstScreenWidth();
-   fxMesa->screen_height = FX_grSstScreenHeight();
+#if defined(__WIN32__)
+   if (fxMesa->windowed) {
+      /* [retro3dfx] the render target is our offscreen surface, sized to the
+       * window client rect, not the whole board scanout. */
+      fxMesa->screen_width = fxMesa->winW;
+      fxMesa->screen_height = fxMesa->winH;
+   } else
+#endif
+   {
+      fxMesa->screen_width = FX_grSstScreenWidth();
+      fxMesa->screen_height = FX_grSstScreenHeight();
+   }
 
    /* window inside screen */
    fxMesa->width = fxMesa->screen_width;
@@ -909,7 +942,12 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
    /* close the hardware first,
     * so we can debug atexit problems (memory leaks, etc).
     */
-   grSstWinClose(fxMesa->glideContext);
+#if defined(__WIN32__)
+   if (fxMesa->windowed)
+      fxWinClose(fxMesa);   /* grSurfaceReleaseContext + release DDraw surfaces */
+   else
+#endif
+      grSstWinClose(fxMesa->glideContext);
    fxCloseHardware();
 
    fxDDDestroyFxMesaContext(fxMesa); /* must be before _mesa_destroy_context */
@@ -990,6 +1028,15 @@ fxMesaSwapBuffers(void)
 
       if (fxMesaCurrentCtx->haveDoubleBuffer) {
 
+#if defined(__WIN32__)
+	 if (fxMesaCurrentCtx->windowed) {
+	    /* [retro3dfx] present the offscreen surface to the window (no page
+	     * flip in windowed mode). grBufferSwap is completed first inside the
+	     * board so the render is finished before we Blt it out. */
+	    grBufferSwap(0);
+	    fxWinSwap(fxMesaCurrentCtx);
+	 } else
+#endif
 	 grBufferSwap(fxMesaCurrentCtx->swapInterval);
 
 #if 0
