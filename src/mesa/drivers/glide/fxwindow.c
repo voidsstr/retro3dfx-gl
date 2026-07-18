@@ -32,10 +32,27 @@
 
 #include <windows.h>
 #include <ddraw.h>
+#include <stdarg.h>
 #include "fxdrv.h"
 
 /* GR_SURFACECONTEXT_WINDOWED (GSFC.H) */
 #define FXWIN_CTX_WINDOWED 0
+
+/* [retro3dfx] direct-file diag that bypasses stderr/freopen (which may not land
+ * for a GUI process). Enabled by FX_WINDOWED_LOG=<path>; off by default. */
+static void fxWinLog(const char *fmt, ...)
+{
+   const char *path = getenv("FX_WINDOWED_LOG");
+   FILE *f;
+   va_list ap;
+   if (!path) return;
+   f = fopen(path, "a");
+   if (!f) return;
+   va_start(ap, fmt);
+   vfprintf(f, fmt, ap);
+   va_end(ap);
+   fclose(f);
+}
 
 typedef GrContext_t (FX_CALL *pfnSurfCreateCtx)(int type);
 typedef void        (FX_CALL *pfnSurfReleaseCtx)(GrContext_t ctx);
@@ -110,23 +127,26 @@ fxWinOpen(fxMesaContext fxMesa, FxU32 hWnd, int w, int h, int wantAux)
    DDSURFACEDESC pdesc;
    GrContext_t gctx = 0;
 
+   fxWinLog("fxWinOpen hwnd=%lx %dx%d aux=%d\n", (unsigned long)hWnd, w, h, wantAux);
    if (w <= 0 || h <= 0) return 0;
-   if (!fxWinResolveProcs()) return 0;
+   if (!fxWinResolveProcs()) { fxWinLog("  resolveProcs FAILED\n"); return 0; }
+   fxWinLog("  procs ok (surfCtx=%p setRender=%p ddCreate=%p)\n",
+            (void*)p_grSurfaceCreateContext, (void*)p_grSurfaceSetRendering, (void*)p_DirectDrawCreate);
 
-   if (p_DirectDrawCreate(NULL, &dd, NULL) != DD_OK || !dd)
-      return 0;
+   if (p_DirectDrawCreate(NULL, &dd, NULL) != DD_OK || !dd) { fxWinLog("  DirectDrawCreate FAILED\n"); return 0; }
+   fxWinLog("  DirectDrawCreate ok dd=%p\n", (void*)dd);
 
    /* cooperative (NOT exclusive) -- leaves the engine's desktop mode alone */
-   if (IDirectDraw_SetCooperativeLevel(dd, (HWND)(UINT_PTR)hWnd, DDSCL_NORMAL) != DD_OK)
-      goto fail;
+   if (IDirectDraw_SetCooperativeLevel(dd, (HWND)(UINT_PTR)hWnd, DDSCL_NORMAL) != DD_OK) { fxWinLog("  SetCoopLevel FAILED\n"); goto fail; }
+   fxWinLog("  SetCoopLevel(NORMAL) ok\n");
 
    /* primary surface + a clipper bound to the window (so Blt clips to it) */
    memset(&pdesc, 0, sizeof(pdesc));
    pdesc.dwSize = sizeof(DDSURFACEDESC);
    pdesc.dwFlags = DDSD_CAPS;
    pdesc.ddsCaps.dwCaps = DDSCAPS_PRIMARYSURFACE;
-   if (IDirectDraw_CreateSurface(dd, &pdesc, &front, NULL) != DD_OK || !front)
-      goto fail;
+   if (IDirectDraw_CreateSurface(dd, &pdesc, &front, NULL) != DD_OK || !front) { fxWinLog("  CreateSurface(PRIMARY) FAILED\n"); goto fail; }
+   fxWinLog("  primary ok front=%p\n", (void*)front);
    if (IDirectDraw_CreateClipper(dd, 0, &clip, NULL) == DD_OK && clip) {
       IDirectDrawClipper_SetHWnd(clip, 0, (HWND)(UINT_PTR)hWnd);
       IDirectDrawSurface_SetClipper(front, clip);
@@ -134,10 +154,12 @@ fxWinOpen(fxMesaContext fxMesa, FxU32 hWnd, int w, int h, int wantAux)
 
    /* offscreen video-memory back buffer that Glide rasterizes into */
    back = fxWinMakeOffscreen(dd, w, h);
-   if (!back) goto fail;
+   if (!back) { fxWinLog("  CreateSurface(BACK vidmem/3ddevice 565) FAILED\n"); goto fail; }
+   fxWinLog("  back ok back=%p\n", (void*)back);
 
    /* create the windowed Glide context and point it at our surfaces */
    gctx = p_grSurfaceCreateContext(FXWIN_CTX_WINDOWED);
+   fxWinLog("  grSurfaceCreateContext -> %lx\n", (unsigned long)gctx);
    if (!gctx) goto fail;
    grSelectContext(gctx);
    p_grSurfaceSetRendering((void*)back);
