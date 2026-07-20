@@ -1067,8 +1067,21 @@ fxCloseHardware(void)
 {
    if (glbGlideInitialized) {
       if (glbTotNumCtx == 0) {
-	 grGlideShutdown();
-	 glbGlideInitialized = 0;
+	 /* [retro3dfx] Keep Glide INITIALIZED across a context destroy by default.
+	  * A game's in-engine resolution change (idTech `vid_restart`) destroys the
+	  * GL context and immediately recreates it at the new mode. The stock path
+	  * did grSstWinClose -> grGlideShutdown -> grGlideInit -> grSstWinOpen(newRes)
+	  * — a full Glide teardown+reinit with a hardware mode-change mid-flight,
+	  * which WEDGES the Voodoo3 board and hangs the whole box (see
+	  * DEBUGGING-NOTES 2026-07-20). Leaving Glide initialized turns the switch
+	  * into the far less disruptive grSstWinClose -> grSstWinOpen(newRes). The
+	  * board is still released by grSstWinClose, and the process teardown (atexit
+	  * cleangraphics / OS) reclaims Glide on final exit. FX_GLIDE_SHUTDOWN=1
+	  * restores the old shutdown-on-last-context behaviour for A/B testing. */
+	 if (getenv("FX_GLIDE_SHUTDOWN")) {
+	    grGlideShutdown();
+	    glbGlideInitialized = 0;
+	 }
       }
    }
 }
