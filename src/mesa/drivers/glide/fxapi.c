@@ -42,6 +42,7 @@
 #if defined(FX)
 #include <math.h>
 #include "fxdrv.h"
+#include "fxrlog.h"   /* [retro3dfx] C:\retrogl.log context-creation tracer */
 
 #include "drivers/common/driverfuncs.h"
 
@@ -149,8 +150,13 @@ static GLboolean GLAPIENTRY fxQueryHardware (void)
        }
     }
 #endif
+    rgl_log("fxQueryHardware: FIRST init -> calling grGlideInit() ...");
     grGlideInit();
+    rgl_log("fxQueryHardware: grGlideInit() RETURNED; calling FX_grSstQueryHardware() ...");
     glb3DfxPresent = FX_grSstQueryHardware(&glbHWConfig);
+    rgl_log("fxQueryHardware: FX_grSstQueryHardware -> present=%d num_sst=%d type0=%d",
+            (int)glb3DfxPresent, (int)glbHWConfig.num_sst,
+            glbHWConfig.num_sst > 0 ? (int)glbHWConfig.SSTs[0].type : -1);
 
     glbGlideInitialized = 1;
 
@@ -237,9 +243,13 @@ gl3DfxSetPaletteEXT(GLuint * pal)
 }
 
 
-static GrScreenResolution_t fxBestResolution (int width, int height)
-{
- static const int resolutions[][3] = {
+/* [retro3dfx] glide resolution enum -> pixel dims. Moved to file scope (was a
+ * function-local static in fxBestResolution) so the C:\retrogl.log tracer can
+ * map a GR_RESOLUTION_* enum back to its WxH at the grSstWinOpen call site.
+ * The table is indexed by the enum value itself (GR_RESOLUTION_320x200==0,
+ * ..._640x480==7, ..._1024x768==0xC, etc.), so row index == enum. Behavior of
+ * fxBestResolution is unchanged. */
+static const int fxResolutions[][3] = {
         { GR_RESOLUTION_320x200,    320,  200 },
         { GR_RESOLUTION_320x240,    320,  240 },
         { GR_RESOLUTION_400x256,    400,  256 },
@@ -264,8 +274,22 @@ static GrScreenResolution_t fxBestResolution (int width, int height)
         { GR_RESOLUTION_1920x1440, 1920, 1440 },
         { GR_RESOLUTION_2048x1536, 2048, 1536 },
         { GR_RESOLUTION_2048x2048, 2048, 2048 }
- };
+};
 
+/* [retro3dfx] map a GR_RESOLUTION_* enum to its pixel WxH for the trace log. */
+static void rgl_res_dims(int res, int *w, int *h)
+{
+   if (res >= 0 && res < (int)(sizeof(fxResolutions) / sizeof(fxResolutions[0]))) {
+      *w = fxResolutions[res][1];
+      *h = fxResolutions[res][2];
+   } else {
+      *w = -1;
+      *h = -1;
+   }
+}
+
+static GrScreenResolution_t fxBestResolution (int width, int height)
+{
  int i, size;
  int lastvalidres = GR_RESOLUTION_640x480;
  int min = 2048 * 2048; /* max is GR_RESOLUTION_2048x2048 */
@@ -278,6 +302,7 @@ static GrScreenResolution_t fxBestResolution (int width, int height)
  GrResolution *presSupported;
 
  if (!fxQueryHardware()) {
+     rgl_log("fxBestResolution: HW query FAILED for %dx%d -> default GR_RESOLUTION_640x480", width, height);
      return lastvalidres;
  }
 
@@ -289,9 +314,9 @@ static GrScreenResolution_t fxBestResolution (int width, int height)
 
  for (i = 0; i < size; i++) {
      int r = presSupported[i].resolution;
-     if ((width <= resolutions[r][1]) && (height <= resolutions[r][2])) {
-        if (min > (resolutions[r][1] * resolutions[r][2])) {
-           min = resolutions[r][1] * resolutions[r][2];
+     if ((width <= fxResolutions[r][1]) && (height <= fxResolutions[r][2])) {
+        if (min > (fxResolutions[r][1] * fxResolutions[r][2])) {
+           min = fxResolutions[r][1] * fxResolutions[r][2];
            lastvalidres = r;
         }
      }
@@ -299,7 +324,10 @@ static GrScreenResolution_t fxBestResolution (int width, int height)
 
  free(presSupported);
 
- return resolutions[lastvalidres][0];
+ rgl_log("fxBestResolution: request %dx%d -> res enum %d (%dx%d), %d supported modes queried",
+         width, height, lastvalidres, fxResolutions[lastvalidres][1],
+         fxResolutions[lastvalidres][2], size);
+ return fxResolutions[lastvalidres][0];
 }
 
 
@@ -309,6 +337,8 @@ fxMesaCreateBestContext(GLuint win, GLint width, GLint height,
 {
  /* fxMesaCreateContext() handles fxQueryHardware() error returns */
  int res = fxBestResolution(width, height);
+ rgl_log("fxMesaCreateBestContext: win=%lu %dx%d -> res enum %d, ref=GR_REFRESH_60Hz(%d)",
+         (unsigned long)win, width, height, res, GR_REFRESH_60Hz);
  return fxMesaCreateContext(win, res, GR_REFRESH_60Hz, attribList);
 }
 
@@ -340,6 +370,13 @@ fxMesaCreateContext(GLuint win,
    
  if (TDFX_DEBUG & VERBOSE_DRIVER) {
     fprintf(stderr, "fxMesaCreateContext(...)\n");
+ }
+
+ {
+    int rw = -1, rh = -1;
+    rgl_res_dims((int)res, &rw, &rh);
+    rgl_log("fxMesaCreateContext: ENTER win=%lu res=%d (%dx%d) ref=%d",
+            (unsigned long)win, (int)res, rw, rh, (int)ref);
  }
 
  /* Okay, first process the user flags */
@@ -378,6 +415,7 @@ fxMesaCreateContext(GLuint win,
                    shareCtx = (GLcontext *)attribList[++i];
 	           break;
               default:
+                   rgl_log("fxMesaCreateContext: BAIL -> NULL (bad attrib %d in attribList)", attribList[i]);
                    fprintf(stderr, "fxMesaCreateContext: ERROR: wrong parameter (%d) passed\n", attribList[i]);
 	           return NULL;
        }
@@ -385,6 +423,7 @@ fxMesaCreateContext(GLuint win,
  }
 
  if (!fxQueryHardware()) {
+    rgl_log("fxMesaCreateContext: no Voodoo hardware (fxQueryHardware failed) -> errorhandler");
     str = "no Voodoo hardware!";
     goto errorhandler;
  }
@@ -552,9 +591,13 @@ fxMesaCreateContext(GLuint win,
      }
      break;
    default:
+     rgl_log("fxMesaCreateContext: BAIL -> errorhandler (unsupported colDepth=%d)", colDepth);
      str = "pixelFormat";
      goto errorhandler;
  }
+ rgl_log("fxMesaCreateContext: colDepth=%d fsaa=%d -> pixFmt=%d (RGB_565=%d ARGB_1555=%d ARGB_8888=%d)",
+         colDepth, (int)fxMesa->fsaa, (int)pixFmt,
+         (int)GR_PIXFMT_RGB_565, (int)GR_PIXFMT_ARGB_1555, (int)GR_PIXFMT_ARGB_8888);
 
  /* Tips:
   * 1. we don't bother setting/checking AUX for stencil, because we'll decide
@@ -623,15 +666,27 @@ fxMesaCreateContext(GLuint win,
             (int)IsWindowVisible((HWND)(UINT_PTR)win),
             (int)(GetForegroundWindow() == (HWND)(UINT_PTR)win)); fflush(stderr);
  }
+ {
+    int rw = -1, rh = -1;
+    rgl_res_dims((int)res, &rw, &rh);
+    rgl_log("fxMesaCreateContext: about to open board: win=%lu res=%d (%dx%d) ref=%d "
+            "HavePixExt=%d pixFmt=%d aux=%d fxWinReq=%d",
+            (unsigned long)win, (int)res, rw, rh, (int)ref,
+            (int)fxMesa->HavePixExt, (int)pixFmt, (int)(aux ? 1 : 0), fxWinReq);
+ }
 #if defined(__WIN32__)
  /* [retro3dfx] windowed render path first, if the caller asked for it. Falls
   * through to fullscreen grSstWinOpen if unavailable (fxWinOpen returns 0). */
  if (fxWinReq) {
     int wReqW = fxWinReqW, wReqH = fxWinReqH;
     fxWinReq = 0;
+    rgl_log("grSstWinOpen[windowed]: -> fxWinOpen(win=%lu, %dx%d, aux=%d)",
+            (unsigned long)win, wReqW, wReqH, (int)(aux ? 1 : 0));
     BEGIN_BOARD_LOCK();
     fxMesa->glideContext = fxWinOpen(fxMesa, (FxU32)win, wReqW, wReqH, aux ? 1 : 0);
     END_BOARD_LOCK();
+    rgl_log("grSstWinOpen[windowed]: fxWinOpen returned glideContext=%lu (0 == failed, falls back to fullscreen)",
+            (unsigned long)fxMesa->glideContext);
     if (!fxMesa->glideContext && (TDFX_DEBUG & VERBOSE_DRIVER))
        fprintf(stderr, "[retro3dfx] windowed open failed; falling back to fullscreen\n");
  }
@@ -639,15 +694,36 @@ fxMesaCreateContext(GLuint win,
  if (!fxMesa->glideContext) {
     BEGIN_BOARD_LOCK();
     if (fxMesa->HavePixExt) {
+       int rw = -1, rh = -1;
+       rgl_res_dims((int)res, &rw, &rh);
+       rgl_log("grSstWinOpenExt: win=%lu res=%d (%dx%d) ref=%d colorformat=%d(ABGR) "
+               "origin=%d(LOWER_LEFT) pixFmt=%d nColBuffers=2 nAuxBuffers=%d  [Napalm PIXEXT path]",
+               (unsigned long)win, (int)res, rw, rh, (int)ref,
+               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, (int)pixFmt, (int)(aux ? 1 : 0));
        fxMesa->glideContext = Glide->grSstWinOpenExt((FxU32)win, res, ref,
                                                      GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
                                                      pixFmt,
                                                      2, aux);
+       rgl_log("grSstWinOpenExt: returned glideContext=%lu (0 == FAILED)",
+               (unsigned long)fxMesa->glideContext);
     } else if (pixFmt == GR_PIXFMT_RGB_565) {
+       int rw = -1, rh = -1;
+       rgl_res_dims((int)res, &rw, &rh);
+       /* THE key line: fullscreen Voodoo3 board open. These are the EXACT args
+        * passed to glide3x's grSstWinOpen. */
+       rgl_log("grSstWinOpen: win=%lu res=%d (%dx%d) ref=%d colorformat=%d(ABGR) "
+               "origin=%d(LOWER_LEFT) nColBuffers=2 nAuxBuffers=%d  [Voodoo3 RGB_565 fullscreen path]",
+               (unsigned long)win, (int)res, rw, rh, (int)ref,
+               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, (int)(aux ? 1 : 0));
        fxMesa->glideContext = grSstWinOpen((FxU32)win, res, ref,
                                            GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
                                            2, aux);
+       rgl_log("grSstWinOpen: returned glideContext=%lu (0 == FAILED)",
+               (unsigned long)fxMesa->glideContext);
     } else {
+       rgl_log("fxMesaCreateContext: NO board-open path taken (HavePixExt=0 and "
+               "pixFmt=%d != GR_PIXFMT_RGB_565=%d) -> glideContext forced to 0",
+               (int)pixFmt, (int)GR_PIXFMT_RGB_565);
        fxMesa->glideContext = 0;
     }
     END_BOARD_LOCK();
@@ -656,7 +732,10 @@ fxMesaCreateContext(GLuint win,
     fprintf(stderr, "[retro3dfx] post board-open ctx=%p windowed=%d\n",
             (void*)fxMesa->glideContext, (int)fxMesa->windowed); fflush(stderr);
  }
+ rgl_log("fxMesaCreateContext: board-open complete: glideContext=%lu windowed=%d (0 == open FAILED)",
+         (unsigned long)fxMesa->glideContext, (int)fxMesa->windowed);
  if (!fxMesa->glideContext) {
+    rgl_log("fxMesaCreateContext: BAIL -> errorhandler 'grSstWinOpen' (board open returned 0)");
     str = "grSstWinOpen";
     goto errorhandler;
  }
@@ -749,7 +828,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [retro3dfx 0.1.31]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.33]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -770,6 +849,7 @@ fxMesaCreateContext(GLuint win,
 				       alphaSize ? accumSize : 0,
                                        1);
    if (!fxMesa->glVis) {
+      rgl_log("fxMesaCreateContext: BAIL -> errorhandler (_mesa_create_visual failed)");
       str = "_mesa_create_visual";
       goto errorhandler;
    }
@@ -778,12 +858,14 @@ fxMesaCreateContext(GLuint win,
    ctx = fxMesa->glCtx = _mesa_create_context(fxMesa->glVis, shareCtx,
 					      &functions, (void *) fxMesa);
    if (!ctx) {
+      rgl_log("fxMesaCreateContext: BAIL -> errorhandler (_mesa_create_context failed)");
       str = "_mesa_create_context";
       goto errorhandler;
    }
 
 
    if (!fxDDInitFxMesaContext(fxMesa)) {
+      rgl_log("fxMesaCreateContext: BAIL -> errorhandler (fxDDInitFxMesaContext failed)");
       str = "fxDDInitFxMesaContext";
       goto errorhandler;
    }
@@ -795,6 +877,7 @@ fxMesaCreateContext(GLuint win,
 					       fxMesa->glVis->accumRedBits > 0,
 					       alphaSize && !fxMesa->haveHwAlpha);
    if (!fxMesa->glBuffer) {
+      rgl_log("fxMesaCreateContext: BAIL -> errorhandler (_mesa_create_framebuffer failed)");
       str = "_mesa_create_framebuffer";
       goto errorhandler;
    }
@@ -816,6 +899,9 @@ fxMesaCreateContext(GLuint win,
    }
 #endif
 
+   rgl_log("fxMesaCreateContext: SUCCESS glideContext=%lu screen=%dx%d colDepth=%d windowed=%d",
+           (unsigned long)fxMesa->glideContext, fxMesa->screen_width, fxMesa->screen_height,
+           colDepth, (int)fxMesa->windowed);
    return fxMesa;
 
 errorhandler:
@@ -843,6 +929,7 @@ errorhandler:
     FREE(fxMesa);
  }
 
+ rgl_log("fxMesaCreateContext: RETURN NULL (errorhandler): %s", str);
  fprintf(stderr, "fxMesaCreateContext: ERROR: %s\n", str);
  return NULL;
 }

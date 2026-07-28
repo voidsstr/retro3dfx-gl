@@ -56,6 +56,7 @@ extern "C"
 #include "glapi.h"
 #include "imports.h"
 #include "fxdrv.h"
+#include "fxrlog.h"   /* [retro3dfx] C:\retrogl.log context-creation tracer */
 
 #define MAX_MESA_ATTRS  20
 
@@ -219,6 +220,56 @@ static HDC hDC;
 static HWND hWND;
 
 
+/* [retro3dfx] One-time "the game loaded THIS ICD" banner, written to
+ * C:\retrogl.log the first time GoldSrc (or any GL app) calls any of our
+ * entry points. Proves the game bound to our opengl32 and not the Microsoft
+ * software GL wrapper, and records which glide3x.dll the loader resolved our
+ * grFoo imports against (the usual .124 failure is an underscore-decoration
+ * mismatch that makes LoadLibrary fall back to software GL entirely). */
+static void rgl_first_entry(const char *fn)
+{
+   static int done = 0;
+   char path[MAX_PATH];
+   HMODULE hg;
+   if (done)
+      return;
+   done = 1;
+   rgl_log("==================================================================");
+   rgl_log("retrogl ICD attached: first entry via %s (pid=%lu)",
+           fn, (unsigned long)GetCurrentProcessId());
+   if (GetModuleFileNameA(NULL, path, sizeof(path)))
+      rgl_log("  host process : %s", path);
+   /* which glide3x.dll got loaded (our grFoo imports bind to it) */
+   hg = GetModuleHandleA("glide3x.dll");
+   if (!hg)
+      hg = GetModuleHandleA("glide3x");
+   if (hg && GetModuleFileNameA(hg, path, sizeof(path)))
+      rgl_log("  glide3x.dll  : %s (module=%p)", path, (void *)hg);
+   else
+      rgl_log("  glide3x.dll  : NOT LOADED (GetModuleHandle failed)");
+}
+
+/* [retro3dfx] DllMain fires the instant ANY app LoadLibrary's us — before the
+ * app calls a single GL entry point. This distinguishes "GoldSrc never loaded
+ * our MiniGL" (no line) from "loaded it but failed before calling GL" (line
+ * present, but no rgl_first_entry banner). Critical for the CS/GoldSrc path,
+ * which resolves exports via kernel32 GetProcAddress (invisible to our per-call
+ * tracer). */
+BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID reserved)
+{
+   (void) hInst;
+   (void) reserved;
+   if (reason == DLL_PROCESS_ATTACH) {
+      char path[MAX_PATH];
+      if (!GetModuleFileNameA(NULL, path, sizeof(path)))
+         path[0] = '\0';
+      rgl_log("### DllMain PROCESS_ATTACH: retrogl LOADED by '%s' (pid=%lu) ###",
+              path, (unsigned long) GetCurrentProcessId());
+   }
+   return TRUE;
+}
+
+
 static int env_check (const char *var, int val)
 {
  const char *env = getenv(var);
@@ -276,17 +327,23 @@ wglCreateContext(HDC hdc)
    WNDPROC oldProc;
    int error;
 
+   rgl_first_entry("wglCreateContext");
+   rgl_log("wglCreateContext(hdc=%p) enter [curPFD=%d]", (void *)hdc, curPFD);
+
    if (ctx) {
+      rgl_log("wglCreateContext: BAIL -> NULL (a context already exists)");
       SetLastError(0);
       return (NULL);
    }
 
    if (!(hWnd = WindowFromDC(hdc))) {
+      rgl_log("wglCreateContext: BAIL -> NULL (WindowFromDC(hdc) == NULL, no window for DC)");
       SetLastError(0);
       return (NULL);
    }
 
    if (curPFD == 0) {
+      rgl_log("wglCreateContext: BAIL -> NULL (curPFD==0: SetPixelFormat never took)");
       wgl_error(WGL_INVALID_PIXELFORMAT);
       return (NULL);
    }
@@ -338,6 +395,10 @@ wglCreateContext(HDC hdc)
         Sleep(5);
      }
         GetClientRect(hWnd, &cliRect);
+        rgl_log("wglCreateContext: hWnd=%p GetClientRect=%ldx%ld curPFD=%d "
+                "pfd.cColorBits=%d mesaColDepth=%d (this WxH feeds the resolution snapper)",
+                (void *)hWnd, (long)cliRect.right, (long)cliRect.bottom, curPFD,
+                (int)pix[curPFD - 1].pfd.cColorBits, (int)pix[curPFD - 1].mesaAttr[1]);
         /* [retro3dfx] Opt-in windowed-Glide rendering (FX_WINDOWED=1, or the
          * legacy MESA_GLX_FX=window). Needed by desktop-fullscreen engines
          * (GoldSrc/Half-Life/CS) whose own ChangeDisplaySettings collides with
@@ -345,18 +406,26 @@ wglCreateContext(HDC hdc)
          * uses the DDraw offscreen+Blt path and silently falls back to the
          * fullscreen path if the surface API isn't available, so Q2/Q3/UT (which
          * don't set the env) are unaffected. */
-        if (env_check("FX_WINDOWED", '1') || env_check("MESA_GLX_FX", 'w'))
+        if (env_check("FX_WINDOWED", '1') || env_check("MESA_GLX_FX", 'w')) {
+           rgl_log("wglCreateContext: FX_WINDOWED/MESA_GLX_FX set -> requesting windowed Glide %ldx%ld",
+                   (long)cliRect.right, (long)cliRect.bottom);
            fxMesaRequestWindowed(cliRect.right, cliRect.bottom);
+        }
         if (TDFX_DEBUG & VERBOSE_DRIVER)
            fprintf(stderr, "[retro3dfx] pre create hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
                    (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
                    (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
+        rgl_log("wglCreateContext: -> fxMesaCreateBestContext(win=%p, %ldx%ld, mesaAttr[colDepth=%d])",
+                (void *)hWnd, (long)cliRect.right, (long)cliRect.bottom,
+                (int)pix[curPFD - 1].mesaAttr[1]);
         error = !(ctx = fxMesaCreateBestContext((GLuint) hWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
+        rgl_log("wglCreateContext: fxMesaCreateBestContext returned ctx=%p (error=%d)", (void *)ctx, error);
         if (TDFX_DEBUG & VERBOSE_DRIVER)
            fprintf(stderr, "[retro3dfx] post create ctx=%p\n", (void*)ctx);
    }
 
    if (error) {
+      rgl_log("wglCreateContext: BAIL -> NULL (context creation failed; app falls back to software GL)");
       SetLastError(0);
       return (NULL);
    }
@@ -367,6 +436,7 @@ wglCreateContext(HDC hdc)
    /* Required by the OpenGL Optimizer 1.1 (is it a Optimizer bug ?) */
    wglMakeCurrent(hdc, (HGLRC) 1);
 
+   rgl_log("wglCreateContext: SUCCESS -> HGLRC 1 (ctx=%p)", (void *)ctx);
    return ((HGLRC) 1);
 }
 
@@ -619,9 +689,11 @@ static struct {
 
 GLAPI PROC GLAPIENTRY
 wglGetProcAddress(LPCSTR lpszProc)
-{ 
+{
    int i;
-   PROC p = (PROC) _glapi_get_proc_address((const char *) lpszProc);
+   PROC p;
+   rgl_first_entry("wglGetProcAddress");
+   p = (PROC) _glapi_get_proc_address((const char *) lpszProc);
 
    /* we can't BlendColor. work around buggy applications */
    if (p && strcmp(lpszProc, "glBlendColor") && strcmp(lpszProc, "glBlendColorEXT"))
@@ -828,6 +900,12 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
    int i, best = -1, qt_valid_pix;
    PIXELFORMATDESCRIPTOR pfd = *ppfd;
 
+   rgl_first_entry("wglChoosePixelFormat");
+   rgl_log("wglChoosePixelFormat: REQUEST cColorBits=%d cDepthBits=%d cAlphaBits=%d "
+           "cStencilBits=%d iPixelType=%d dwFlags=0x%lx",
+           (int)ppfd->cColorBits, (int)ppfd->cDepthBits, (int)ppfd->cAlphaBits,
+           (int)ppfd->cStencilBits, (int)ppfd->iPixelType, (unsigned long)ppfd->dwFlags);
+
    qt_valid_pix = pfd_tablen();
 
 #if 1 || QUAKE2 || GORE
@@ -848,7 +926,12 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
   }
 #endif
 
+   rgl_log("wglChoosePixelFormat: after card remap cColorBits=%d cDepthBits=%d (tablen=%d formats)",
+           (int)pfd.cColorBits, (int)pfd.cDepthBits, qt_valid_pix);
+
    if (pfd.nSize != sizeof(PIXELFORMATDESCRIPTOR) || pfd.nVersion != 1) {
+      rgl_log("wglChoosePixelFormat: BAIL -> 0 (bad nSize=%d/nVersion=%d)",
+              (int)pfd.nSize, (int)pfd.nVersion);
       SetLastError(0);
       return (0);
    }
@@ -892,6 +975,8 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
    }
 
    if (best == -1) {
+      rgl_log("wglChoosePixelFormat: NO MATCH -> 0 (no pixelformat fits the request; "
+              "full PFD dump follows in MESA.LOG)");
       FILE *err = fopen("MESA.LOG", "w");
       if (err != NULL) {
          fprintf(err, "wglChoosePixelFormat failed\n");
@@ -928,6 +1013,7 @@ wglChoosePixelFormat(HDC hdc, const PIXELFORMATDESCRIPTOR * ppfd)
       return (0);
    }
 
+   rgl_log("wglChoosePixelFormat: SELECTED pixelformat #%d (1-based)", best);
    return (best);
 }
 
@@ -943,6 +1029,8 @@ wglDescribePixelFormat(HDC hdc, int iPixelFormat, UINT nBytes,
 		       LPPIXELFORMATDESCRIPTOR ppfd)
 {
    int qt_valid_pix;
+
+   rgl_first_entry("wglDescribePixelFormat");
 
    qt_valid_pix = pfd_tablen();
 
@@ -987,22 +1075,32 @@ wglSetPixelFormat(HDC hdc, int iPixelFormat, const PIXELFORMATDESCRIPTOR * ppfd)
 {
    int qt_valid_pix;
 
+   rgl_first_entry("wglSetPixelFormat");
+
    qt_valid_pix = pfd_tablen();
+
+   rgl_log("wglSetPixelFormat: iPixelFormat=%d (valid range 1..%d, ppfd=%s)",
+           iPixelFormat, qt_valid_pix, ppfd ? "supplied" : "NULL");
 
    if (iPixelFormat < 1 || iPixelFormat > qt_valid_pix) {
       if (ppfd == NULL) {
          PIXELFORMATDESCRIPTOR my_pfd;
          if (!wglDescribePixelFormat(hdc, iPixelFormat, sizeof(PIXELFORMATDESCRIPTOR), &my_pfd)) {
+            rgl_log("wglSetPixelFormat: BAIL -> FALSE (iPixelFormat %d out of range, "
+                    "DescribePixelFormat failed)", iPixelFormat);
             SetLastError(0);
             return (FALSE);
          }
       } else if (ppfd->nSize != sizeof(PIXELFORMATDESCRIPTOR)) {
+         rgl_log("wglSetPixelFormat: BAIL -> FALSE (iPixelFormat %d out of range, bad ppfd->nSize=%d)",
+                 iPixelFormat, (int)ppfd->nSize);
          SetLastError(0);
          return (FALSE);
       }
    }
    curPFD = iPixelFormat;
 
+   rgl_log("wglSetPixelFormat: OK -> TRUE (curPFD=%d; this arms wglCreateContext)", curPFD);
    return (TRUE);
 }
 
