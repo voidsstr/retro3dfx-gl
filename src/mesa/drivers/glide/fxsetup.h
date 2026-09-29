@@ -662,7 +662,7 @@ fxSelectSingleTMUSrcNapalm_NoLock(fxMesaContext fxMesa, GLint tmu, FxBool LODble
       }
       else {
 #if 1
-         grTexCombine(GR_TMU0,
+         fx_sh_grTexCombine(GR_TMU0,
                       GR_COMBINE_FUNCTION_BLEND,
                       GR_COMBINE_FACTOR_ONE,
                       GR_COMBINE_FUNCTION_BLEND,

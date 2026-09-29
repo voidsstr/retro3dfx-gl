@@ -83,13 +83,34 @@ static GrHwConfiguration glbHWConfig;
 static int glbCurrentBoard = 0;
 
 
+/* [retro3dfx 0.1.62] Set by the process-exit handler. fxCloseHardware keeps
+ * Glide initialised across a context destroy (vid_restart safety, 0.1.31), but
+ * at PROCESS EXIT that left grGlideShutdown uncalled, so the board was never
+ * released through Glide - the process teardown was left to reclaim it.
+ * Found while chasing an intermittent dead board mapping in AmigaMerlin's
+ * grGlideInit on the Voodoo 5 6000 (.124, 2026-09-24). An interleaved A/B on a
+ * fresh boot (10 launches each) did NOT reproduce that fault with either
+ * build, so this is hygiene - release what we acquired - not a proven cure. */
+static int glbProcessExiting = 0;
+
 #if defined(__WIN32__)
 static int
 cleangraphics(void)
 {
-   glbTotNumCtx = 1;
-   fxMesaDestroyContext(fxMesaCurrentCtx);
-
+   glbProcessExiting = 1;
+   fxProfStop();   /* [retro3dfx] 0.1.67: writes RETROGL_PROF, if armed */
+   if (fxMesaCurrentCtx) {
+      glbTotNumCtx = 1;
+      fxMesaDestroyContext(fxMesaCurrentCtx);   /* -> fxCloseHardware */
+   }
+   /* The game may already have deleted its context (wglDeleteContext before
+    * exit), in which case nothing above reached fxCloseHardware. */
+   if (glbGlideInitialized) {
+      rgl_log("cleangraphics: process exit -> grGlideShutdown()");
+      grGlideShutdown();
+      rgl_log("cleangraphics: grGlideShutdown returned");
+      glbGlideInitialized = 0;
+   }
    return 0;
 }
 #elif defined(__linux__)
@@ -111,6 +132,30 @@ cleangraphics_handler(int s)
 }
 #endif
 
+
+/* [retro3dfx] 0.1.67: Glide's default error callback reports a FATAL error
+ * with MessageBox(NULL, ...) + exit(1). Behind a game's fullscreen window
+ * nobody can see or dismiss that box, and the game waits forever - the
+ * intermittent Quake III "hang in grGlideInit" on the V5 6000 (.124,
+ * 2026-09-25) was exactly that: ntsd put the thread in USER32!MessageBoxA
+ * called from glide3x!_grErrorDefaultCallback, the text in minihwc's
+ * errorString. Log it and RETURN instead: Glide then skips the board,
+ * FX_grSstQueryHardware finds none, and the context fails cleanly - a
+ * failure the game can report and a runner can retry. Our h5 Glide keeps a
+ * callback installed before grGlideInit (fork, gpci.c); a Glide that resets
+ * it (AmigaMerlin's) simply behaves as before. */
+static int glbGlideErrors = 0;
+static int glbGlideFatal = 0;
+
+static void   /* cdecl: GrErrorCallbackFnc_t has no FX_CALL */
+fxGlideErrorCallback(const char *string, FxBool fatal)
+{
+   if (fatal)
+      glbGlideFatal++;
+   if (glbGlideErrors++ < 32)
+      rgl_log("GLIDE %s ERROR: %s", fatal ? "FATAL" : "non-fatal",
+              string ? string : "(null)");
+}
 
 /*
  * Query 3Dfx hardware presence/kind
@@ -151,8 +196,10 @@ static GLboolean GLAPIENTRY fxQueryHardware (void)
     }
 #endif
     rgl_log("fxQueryHardware: FIRST init -> calling grGlideInit() ...");
+    grErrorSetCallback(fxGlideErrorCallback);
     grGlideInit();
-    rgl_log("fxQueryHardware: grGlideInit() RETURNED; calling FX_grSstQueryHardware() ...");
+    rgl_log("fxQueryHardware: grGlideInit() RETURNED (%d fatal Glide error(s)); "
+            "calling FX_grSstQueryHardware() ...", glbGlideFatal);
     glb3DfxPresent = FX_grSstQueryHardware(&glbHWConfig);
     rgl_log("fxQueryHardware: FX_grSstQueryHardware -> present=%d num_sst=%d type0=%d",
             (int)glb3DfxPresent, (int)glbHWConfig.num_sst,
@@ -331,15 +378,73 @@ static GrScreenResolution_t fxBestResolution (int width, int height)
 }
 
 
+/* [retro3dfx 0.1.64] Fullscreen refresh. Re-implements the 0.1.34 fix, which
+ * was lost from every source (README §15.4) while its test survived
+ * (tests/native/test_fx_best_refresh.c, which this mirrors exactly).
+ * Glide programs the video timing itself, so GDI/-freq cannot override it; the
+ * old code passed GR_REFRESH_60Hz to every fullscreen game - visible flicker on
+ * a CRT. Choose: env override (FX_GLIDE_REFRESH_RATE / SSTV2_REFRESH_RATE /
+ * MESA_FX_REFRESH, in Hz) else the highest rate the display driver enumerates
+ * for WxH, snapped DOWN to a GR_REFRESH_* timing Glide has; below 60 or no
+ * answer -> 60. */
+static GrScreenRefresh_t
+fxSnapRefresh(int hz)
+{
+   static const struct { int hz; GrScreenRefresh_t ref; } tbl[] = {
+      {120, GR_REFRESH_120Hz}, {100, GR_REFRESH_100Hz}, {90, GR_REFRESH_90Hz},
+      {85, GR_REFRESH_85Hz},   {80, GR_REFRESH_80Hz},   {75, GR_REFRESH_75Hz},
+      {72, GR_REFRESH_72Hz},   {70, GR_REFRESH_70Hz},   {60, GR_REFRESH_60Hz},
+   };
+   unsigned i;
+   for (i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
+      if (tbl[i].hz <= hz)
+         return tbl[i].ref;
+   return GR_REFRESH_60Hz;
+}
+
+static GrScreenRefresh_t
+fxBestRefresh(int width, int height)
+{
+   int hz = 0;
+   const char *src = "none";
+   const char *env = getenv("FX_GLIDE_REFRESH_RATE");
+   if (!env) env = getenv("SSTV2_REFRESH_RATE");
+   if (!env) env = getenv("MESA_FX_REFRESH");
+   if (env) {
+      hz = atoi(env);
+      src = "env";
+   }
+#if defined(__WIN32__)
+   else {
+      DEVMODEA dm;
+      DWORD i;
+      memset(&dm, 0, sizeof(dm));
+      dm.dmSize = sizeof(dm);
+      for (i = 0; EnumDisplaySettingsA(NULL, i, &dm); i++) {
+         /* 0 and 1 Hz are the driver's "default" sentinels, never a rate */
+         if ((int)dm.dmPelsWidth == width && (int)dm.dmPelsHeight == height &&
+             dm.dmDisplayFrequency > 1 && (int)dm.dmDisplayFrequency > hz)
+            hz = (int)dm.dmDisplayFrequency;
+      }
+      src = "EnumDisplaySettings";
+   }
+#endif
+   rgl_log("fxBestRefresh: %dx%d max %d Hz (%s) -> GR_REFRESH enum %d",
+           width, height, hz, src, (int)fxSnapRefresh(hz));
+   return fxSnapRefresh(hz);
+}
+
+
 fxMesaContext GLAPIENTRY
 fxMesaCreateBestContext(GLuint win, GLint width, GLint height,
 			const GLint attribList[])
 {
  /* fxMesaCreateContext() handles fxQueryHardware() error returns */
  int res = fxBestResolution(width, height);
- rgl_log("fxMesaCreateBestContext: win=%lu %dx%d -> res enum %d, ref=GR_REFRESH_60Hz(%d)",
-         (unsigned long)win, width, height, res, GR_REFRESH_60Hz);
- return fxMesaCreateContext(win, res, GR_REFRESH_60Hz, attribList);
+ GrScreenRefresh_t ref = fxBestRefresh(width, height);
+ rgl_log("fxMesaCreateBestContext: win=%lu %dx%d -> res enum %d, ref enum %d",
+         (unsigned long)win, width, height, res, (int)ref);
+ return fxMesaCreateContext(win, res, ref, attribList);
 }
 
 
@@ -767,6 +872,9 @@ fxMesaCreateContext(GLuint win,
        grLoadGammaTable(n, rr, gg, bb);
        END_BOARD_LOCK();
        fxMesa->haveDefaultGamma = GL_TRUE;
+#if defined(__WIN32__)
+       fxWglNoteGamma(n, rr, gg, bb);   /* 0.1.77: what Get3DFX must report */
+#endif
     }
     if (!getenv("FX_DITHER") || atoi(getenv("FX_DITHER")) != 0) {
        BEGIN_BOARD_LOCK();
@@ -828,7 +936,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.33]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.78]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -1024,17 +1132,26 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
       BEGIN_BOARD_LOCK();
       grLoadGammaTable(n, rr, gg, bb);
       END_BOARD_LOCK();
+#if defined(__WIN32__)
+      fxWglNoteGamma(n, rr, gg, bb);    /* 0.1.77: identity is back in the DAC */
+#endif
    }
 
    /* close the hardware first,
     * so we can debug atexit problems (memory leaks, etc).
     */
+   /* [retro3dfx] 0.1.67 teardown breadcrumbs. Quake II never reaches the end
+    * of its own quit on the all-ours V5 6000 stack (the runner force-kills it
+    * 10 s later), and a force-kill is what leaves the display driver's stale
+    * per-PID slot behind; a log line per step names the step that stops. */
+   rgl_log("fxMesaDestroyContext: closing board (windowed=%d)", (int) fxMesa->windowed);
 #if defined(__WIN32__)
    if (fxMesa->windowed)
       fxWinClose(fxMesa);   /* grSurfaceReleaseContext + release DDraw surfaces */
    else
 #endif
       grSstWinClose(fxMesa->glideContext);
+   rgl_log("fxMesaDestroyContext: board closed; fxCloseHardware");
    fxCloseHardware();
 
    fxDDDestroyFxMesaContext(fxMesa); /* must be before _mesa_destroy_context */
@@ -1047,6 +1164,7 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
 
    if (fxMesa == fxMesaCurrentCtx)
       fxMesaCurrentCtx = NULL;
+   rgl_log("fxMesaDestroyContext: done");
 }
 
 
@@ -1106,6 +1224,37 @@ fxMesaMakeCurrent(fxMesaContext fxMesa)
 void GLAPIENTRY
 fxMesaSwapBuffers(void)
 {
+   /* [retro3dfx] FX_PROFILE=1: per-frame cost report, every 100 frames. */
+   {
+      extern unsigned long fxp_setup_calls, fxp_dbl_calls, fxp_single_calls;
+      extern unsigned long fxp_texcomb_issued, fxp_texcomb_skipped, fxp_texsource_issued;
+      extern unsigned long long fxp_setup_cycles;
+      extern unsigned long fxp_pipeline_runs, fxp_verts;
+      extern unsigned long long fxp_swap_cycles;
+      extern unsigned long fxp_fixup, fxp_choose, fxp_begins, fxp_vsize;
+      extern unsigned long long fxp_imm_cycles;
+      extern unsigned long long fxp_pipeline_cycles;
+      extern int fxp_enabled;
+      static unsigned long frames = 0;
+      if (fxp_enabled < 0) fxp_enabled = getenv("FX_PROFILE") ? 1 : 0;
+      if (fxp_enabled > 0 && ++frames % 100 == 0) {
+         rgl_log("PROF f=%lu setup/f=%lu dbl/f=%lu pipe/f=%lu verts/f=%lu "
+                 "kcyc_pipe/f=%lu kcyc_setup/f=%lu KCYC_SWAP/f=%lu FIXUP/f=%lu BEGINS/f=%lu VSZ=%lu KCYC_IMM/f=%lu",
+                 frames, fxp_setup_calls/100, fxp_dbl_calls/100,
+                 fxp_pipeline_runs/100, fxp_verts/100,
+                 (unsigned long)(fxp_pipeline_cycles/100/1000),
+                 (unsigned long)(fxp_setup_cycles/100/1000),
+                 (unsigned long)(fxp_swap_cycles/100/1000),
+                 fxp_fixup/100, fxp_begins/100, fxp_vsize,
+                 (unsigned long)(fxp_imm_cycles/100/1000));
+         fxp_setup_calls = fxp_dbl_calls = fxp_single_calls = 0;
+         fxp_texcomb_issued = fxp_texcomb_skipped = fxp_texsource_issued = 0;
+         fxp_setup_cycles = 0;
+         fxp_pipeline_runs = fxp_verts = 0; fxp_pipeline_cycles = 0;
+         fxp_swap_cycles = 0;
+         fxp_fixup = fxp_choose = fxp_begins = 0; fxp_imm_cycles = 0;
+      }
+   }
    if (TDFX_DEBUG & VERBOSE_DRIVER) {
       fprintf(stderr, "fxMesaSwapBuffers()\n");
    }
@@ -1120,7 +1269,21 @@ fxMesaSwapBuffers(void)
 	    /* [retro3dfx] present the offscreen surface to the window (no page
 	     * flip in windowed mode). grBufferSwap is completed first inside the
 	     * board so the render is finished before we Blt it out. */
-	    grBufferSwap(0);
+	    {
+	       /* [retro3dfx] FX_PROFILE: everything Mesa does is identical between
+	        * single- and multi-textured frames (TNL 5.39 vs 5.55ms, same vertex
+	        * count, 0 texture downloads), yet the frame is 14ms longer. If that
+	        * time is the hardware, it shows up as a blocking swap. */
+	       extern int fxp_enabled; extern unsigned long long fxp_swap_cycles;
+	       unsigned long _l0,_h0,_l1,_h1;
+	       if (fxp_enabled > 0) __asm__ __volatile__("rdtsc":"=a"(_l0),"=d"(_h0));
+	       grBufferSwap(0);
+	       if (fxp_enabled > 0) {
+	          __asm__ __volatile__("rdtsc":"=a"(_l1),"=d"(_h1));
+	          fxp_swap_cycles += (((unsigned long long)_h1<<32)|_l1)
+	                           - (((unsigned long long)_h0<<32)|_l0);
+	       }
+	    }
 	    fxWinSwap(fxMesaCurrentCtx);
 	 } else
 #endif
@@ -1165,8 +1328,10 @@ fxCloseHardware(void)
 	  * board is still released by grSstWinClose, and the process teardown (atexit
 	  * cleangraphics / OS) reclaims Glide on final exit. FX_GLIDE_SHUTDOWN=1
 	  * restores the old shutdown-on-last-context behaviour for A/B testing. */
-	 if (getenv("FX_GLIDE_SHUTDOWN")) {
+	 if (glbProcessExiting || getenv("FX_GLIDE_SHUTDOWN")) {
+	    rgl_log("fxCloseHardware: grGlideShutdown()");
 	    grGlideShutdown();
+	    rgl_log("fxCloseHardware: grGlideShutdown returned");
 	    glbGlideInitialized = 0;
 	 }
       }

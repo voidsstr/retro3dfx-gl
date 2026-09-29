@@ -1849,7 +1849,23 @@ fxDDInitExtensions(GLcontext * ctx)
 #endif
 
    _mesa_enable_extension(ctx, "GL_ARB_point_sprite");
-   _mesa_enable_extension(ctx, "GL_EXT_point_parameters");
+   /* [retro3dfx] GL_EXT_point_parameters is WITHDRAWN by default.
+    *
+    * We advertised an extension we do not accelerate. Mesa implements
+    * distance-attenuated points by expanding each one into geometry, so an app
+    * that takes the extension gets a slower path than its own fallback. 3dfx's
+    * own MiniGL never advertised it -- Quake II logs
+    * "...GL_EXT_point_parameters not found" against the MiniGL and
+    * "...using GL_EXT_point_parameters" against us, and then draws its
+    * particles the expensive way.
+    *
+    * Measured on .171 (Voodoo 2, Q2 demo1 640x480 vsync off, 4 runs each,
+    * zero variance): advertised 51.0 fps, withdrawn 57.2 fps = +12.2%.
+    *
+    * Set FX_POINT_PARAMS=1 to restore it for an app that genuinely wants it. */
+   if (getenv("FX_POINT_PARAMS")) {
+      _mesa_enable_extension(ctx, "GL_EXT_point_parameters");
+   }
    /* [retro3dfx] The Glide paletted-texture path (glColorTableEXT +
     * GL_COLOR_INDEX8 uploads) is incomplete for some engines' usage
     * (GoldSrc/Half-Life uploads 8-bit paletted lightmapped world textures and
@@ -1867,6 +1883,33 @@ fxDDInitExtensions(GLcontext * ctx)
 
    if (fxMesa->haveTwoTMUs && !getenv("FX_NO_MULTITEXTURE")) {
       _mesa_enable_extension(ctx, "GL_ARB_multitexture");
+
+      /* [retro3dfx] 0.1.75: GL_SGIS_multitexture is ON by default;
+       * FX_SGIS_MULTITEXTURE=0 turns it off. The history below explains why
+       * it was opt-in: the "fixed CPU wall" was three bugs in THIS ICD
+       * (0.1.71-0.1.74: whole-level re-downloads per glTexSubImage2D, a
+       * getenv per unit select, a vertex flush per unit switch). With them
+       * fixed, Quake II single-pass on the V5 6000 is +63..71 % over two-pass
+       * on one chip (every resolution) and +33 % at 1024x768 on four; only
+       * CPU-bound 640/800 on four chips favour two-pass (~200 fps either way).
+       *
+       * Original note - GL_SGIS_multitexture was OPT-IN (FX_SGIS_MULTITEXTURE=1).
+       *
+       * Quake II (1997) predates ARB_multitexture and probes ONLY for the SGIS
+       * name, so advertising it makes Q2 switch from two-pass lightmapping to
+       * single-pass -- which SHOULD be a large win on a 2-TMU Voodoo 2.
+       * Measured on .171 (Voodoo 2, 12MB) 2026-08-29 it is not: with SGIS off
+       * the demo1 timedemo runs 51.0 fps; with it on the same timedemo does not
+       * finish inside 180s (vs 13.5s), while fx_check_IsInHardware's Q2
+       * exemption at fxdd.c:2072-2079 says the env-mode pair is NOT falling
+       * back to software. Cause not yet identified, so this stays OFF by
+       * default: shipping it would be a hard regression.
+       * Entry points live in fxwgl.c (fx_glSelectTextureSGIS et al). */
+      {
+         const char *sg = getenv("FX_SGIS_MULTITEXTURE");
+         if (!(sg && sg[0] == '0'))
+            _mesa_enable_extension(ctx, "GL_SGIS_multitexture");
+      }
    }
 
    if (fxMesa->type >= GR_SSTTYPE_Voodoo4) {

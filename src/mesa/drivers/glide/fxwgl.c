@@ -71,7 +71,37 @@ struct __pixelformat__
    GLint mesaAttr[MAX_MESA_ATTRS];
 };
 
+/* [retro3dfx] 0.1.77: the ramp WGL_3DFX_gamma_control reports. Until 0.1.76
+ * this was zero-filled until the game's first Set, while the DAC really held
+ * our FX_GAMMA ramp (fxapi.c) or Glide's identity. id Tech 3 saves what Get
+ * returns as the "original" gamma (WG_CheckHardwareGamma) and loads it back in
+ * GLimp_Shutdown (WG_RestoreGamma), so every vid_restart and every quit loaded
+ * an ALL-ZERO CLUT: black until the next Set, or until our own identity
+ * restore at context destroy (none when FX_GAMMA=1.0). Soldier of Fortune II
+ * MP does exactly this: sof2mp.exe 0x4de050 saves, 0x4de330 restores. Now the
+ * table tracks every ramp this ICD loads: identity before the first (what
+ * Glide's board open leaves unless SSTH3_*GAMMA is set), then
+ * fxWglNoteGamma() and wglSetDeviceGammaRamp3DFX. */
 static GLushort gammaTable[3*256];
+static GLboolean gammaTableKnown = GL_FALSE;
+
+/* An n-entry 8-bit Glide ramp (what grLoadGammaTable takes) as the 3 x 256
+ * 16-bit WGL ramp: entry i of 256 comes from Glide entry i*n/256, the inverse
+ * of wglSetDeviceGammaRamp3DFX's index = i * (256/n), widened v -> v*0x101. */
+void
+fxWglNoteGamma(int n, const FxU32 *r, const FxU32 *g, const FxU32 *b)
+{
+ int i, k;
+ if (n <= 0 || n > 256 || !r || !g || !b)
+    return;
+ for (i = 0; i < 256; i++) {
+     k = i * n / 256;
+     gammaTable[i]       = (GLushort)((r[k] & 0xff) * 0x101);
+     gammaTable[256 + i] = (GLushort)((g[k] & 0xff) * 0x101);
+     gammaTable[512 + i] = (GLushort)((b[k] & 0xff) * 0x101);
+ }
+ gammaTableKnown = GL_TRUE;
+}
 
 static struct __pixelformat__ pix[] = {
    /* 16bit RGB565 single buffer with depth */
@@ -258,13 +288,19 @@ static void rgl_first_entry(const char *fn)
 BOOL WINAPI DllMain(HINSTANCE hInst, DWORD reason, LPVOID reserved)
 {
    (void) hInst;
-   (void) reserved;
    if (reason == DLL_PROCESS_ATTACH) {
       char path[MAX_PATH];
       if (!GetModuleFileNameA(NULL, path, sizeof(path)))
          path[0] = '\0';
       rgl_log("### DllMain PROCESS_ATTACH: retrogl LOADED by '%s' (pid=%lu) ###",
               path, (unsigned long) GetCurrentProcessId());
+   } else if (reason == DLL_PROCESS_DETACH) {
+      /* [retro3dfx] 0.1.67: reserved != NULL means the process is exiting;
+       * NULL means FreeLibrary (an engine's renderer restart). Its ABSENCE
+       * after a run means the process was terminated, not exited. */
+      rgl_log("### DllMain PROCESS_DETACH: retrogl %s (pid=%lu) ###",
+              reserved ? "process exit" : "FreeLibrary",
+              (unsigned long) GetCurrentProcessId());
    }
    return TRUE;
 }
@@ -387,12 +423,48 @@ wglCreateContext(HDC hdc)
       * the game thread enters grSstWinOpen without pumping, it deadlocks. Q3's
       * window is already settled, which is why it never hit this. Pump so the
       * WM_ACTIVATE/WM_SETFOCUS get dispatched and the window is truly active. */
-     for (pumpI = 0; pumpI < 40; pumpI++) {
-        while (PeekMessage(&pumpMsg, NULL, 0, 0, PM_REMOVE)) {
-           TranslateMessage(&pumpMsg);
-           DispatchMessage(&pumpMsg);
+     /* [retro3dfx 0.1.65] The inner loop was unbounded, and WM_PAINT is not a
+      * queued message: Windows synthesises it for as long as the window has an
+      * update region. Loaded as the SYSTEM ICD, Microsoft's opengl32 subclasses
+      * the window too, and under SDL (ioquake3) the region never cleared - the
+      * thread sat in this loop forever inside wglCreateContext (ntsd on .124,
+      * 2026-09-24: DispatchMessageA(WM_PAINT) -> __wglMonitor -> opengl32 hook
+      * -> SDL WndProc -> EndPaint, every time). The pump exists only to let the
+      * ACTIVATION messages through (idTech2 ref_gl deadlock, see above), so:
+      * validate WM_PAINT instead of dispatching it (the game repaints every
+      * frame anyway), cap the total, and never swallow a WM_QUIT. */
+     /* [retro3dfx 0.1.76] ...and the WM_PAINT branch was itself unbounded: a
+      * paint that ValidateRect does not end (Unreal Tournament's OpenGLDrv
+      * viewport on .124, 2026-09-28) spun this loop 87,500,081 times - 195 s
+      * of a 220 s startup, and on another window it could be forever. So a
+      * validated paint counts against the pump's budget too: after
+      * RGL_PUMP_PAINTS of them, stop pumping (the activation messages this
+      * exists for arrive first, and the game repaints every frame anyway). */
+     {
+#define RGL_PUMP_PAINTS 64
+        int dispatched = 0, painted = 0, quit = 0;
+        for (pumpI = 0; pumpI < 40 && dispatched < 256 && painted < RGL_PUMP_PAINTS && !quit;
+             pumpI++) {
+           while (dispatched < 256 && painted < RGL_PUMP_PAINTS &&
+                  PeekMessage(&pumpMsg, NULL, 0, 0, PM_REMOVE)) {
+              if (pumpMsg.message == WM_QUIT) {
+                 PostQuitMessage((int) pumpMsg.wParam);   /* hand it back */
+                 quit = 1;
+                 break;
+              }
+              if (pumpMsg.message == WM_PAINT) {
+                 ValidateRect(pumpMsg.hwnd, NULL);
+                 painted++;
+                 continue;
+              }
+              TranslateMessage(&pumpMsg);
+              DispatchMessage(&pumpMsg);
+              dispatched++;
+           }
+           Sleep(5);
         }
-        Sleep(5);
+        rgl_log("wglCreateContext: activation pump dispatched=%d paints-validated=%d quit=%d",
+                dispatched, painted, quit);
      }
         GetClientRect(hWnd, &cliRect);
         rgl_log("wglCreateContext: hWnd=%p GetClientRect=%ldx%ld curPFD=%d "
@@ -451,6 +523,7 @@ GLAPI BOOL GLAPIENTRY
 wglDeleteContext(HGLRC hglrc)
 {
    if (ctx && hglrc == (HGLRC) 1) {
+      rgl_log("wglDeleteContext: enter");
 
       fxMesaDestroyContext(ctx);
 
@@ -458,6 +531,7 @@ wglDeleteContext(HGLRC hglrc)
 
       ctx = NULL;
       hDC = 0;
+      rgl_log("wglDeleteContext: done");
       return (TRUE);
    }
 
@@ -511,6 +585,13 @@ GLAPI BOOL GLAPIENTRY
 wglGetDeviceGammaRamp3DFX (HDC hdc, LPVOID arrays)
 {
  /* gammaTable should be per-context */
+ if (!gammaTableKnown) {
+    /* no ramp loaded by us or the game yet: report identity, never zeros */
+    GLint i;
+    for (i = 0; i < 256; i++)
+       gammaTable[i] = gammaTable[256 + i] = gammaTable[512 + i] = (GLushort)(i * 0x101);
+    gammaTableKnown = GL_TRUE;
+ }
  memcpy(arrays, gammaTable, 3*256*sizeof(GLushort));
  return TRUE;
 }
@@ -524,6 +605,7 @@ wglSetDeviceGammaRamp3DFX (HDC hdc, LPVOID arrays)
 
  /* gammaTable should be per-context */
  memcpy(gammaTable, arrays, 3*256*sizeof(GLushort));
+ gammaTableKnown = GL_TRUE;
 
  tableSize = FX_grGetInteger(GR_GAMMA_TABLE_ENTRIES);
  inc = 256 / tableSize;
@@ -660,10 +742,64 @@ wglGetExtensionsStringARB (HDC hdc)
  return wglGetExtensionsStringEXT();
 }
 
+/* ---- GL_SGIS_multitexture shim -------------------------------------------
+ * Quake II resolves glSelectTextureSGIS / glMTexCoord2fSGIS through
+ * wglGetProcAddress once it sees GL_SGIS_multitexture in GL_EXTENSIONS.
+ * SGIS_multitexture is a strict subset of ARB_multitexture; the only
+ * difference that matters is the texture-unit enum base, so translate it.
+ *   GL_TEXTURE0_SGIS = 0x835E, GL_TEXTURE0_ARB = 0x84C0
+ */
+#define GL_TEXTURE0_SGIS 0x835E
+
+static void APIENTRY fx_glSelectTextureSGIS(GLenum target)
+{
+   /* SGIS_multitexture has ONE selector: it switches the unit for immediate-mode
+    * state AND for array pointers. ARB split that into glActiveTexture (server)
+    * and glClientActiveTexture (client), so a faithful shim must set BOTH.
+    * Quake II enables GL_EXT_compiled_vertex_array and issues glTexCoordPointer
+    * for unit 1 after selecting it -- with only the server unit switched those
+    * pointers land on unit 0 and the multitexture path degenerates. */
+   GLenum unit = (GLenum)(GL_TEXTURE0_ARB + (target - GL_TEXTURE0_SGIS));
+   glActiveTextureARB(unit);
+   /* _mesa_ClientActiveTextureARB has NO early-out and does an unconditional
+    * FLUSH_VERTICES(_NEW_ARRAY) -- unlike _mesa_ActiveTextureARB, which returns
+    * early when the unit is unchanged. An app that selects a unit per surface
+    * therefore eats a vertex flush + full array revalidation per surface even
+    * when it draws in immediate mode and has no arrays bound.
+    * FX_SGIS_NO_CLIENTTEX=1 skips it, to attribute that cost.
+    *
+    * [retro3dfx] 0.1.72: read that variable ONCE. It was read on every call,
+    * and Quake II selects a unit twice per surface: XP msvcrt's getenv is
+    * locale-aware (MultiByteToWideChar, CompareStringA, GetVersionExW per
+    * call), and the ICD profiler put the env/locale functions at ~27 % of a
+    * single-pass Quake II frame on the V5 6000 - the largest cost left once
+    * 0.1.71 fixed the lightmap re-downloads. */
+   static int noClientTex = -1;
+   if (noClientTex < 0)
+      noClientTex = getenv("FX_SGIS_NO_CLIENTTEX") != NULL;
+   if (!noClientTex) {
+      glClientActiveTextureARB(unit);
+   }
+}
+
+static void APIENTRY fx_glMTexCoord2fSGIS(GLenum target, GLfloat s, GLfloat t)
+{
+   glMultiTexCoord2fARB((GLenum)(GL_TEXTURE0_ARB + (target - GL_TEXTURE0_SGIS)), s, t);
+}
+
+static void APIENTRY fx_glMTexCoord2fvSGIS(GLenum target, const GLfloat *v)
+{
+   glMultiTexCoord2fvARB((GLenum)(GL_TEXTURE0_ARB + (target - GL_TEXTURE0_SGIS)), v);
+}
+
 static struct {
        const char *name;
        PROC func;
 } wgl_ext[] = {
+       /* GL_SGIS_multitexture (Quake II and other 1997-era GL apps) */
+       {"glSelectTextureSGIS",          (PROC)fx_glSelectTextureSGIS},
+       {"glMTexCoord2fSGIS",            (PROC)fx_glMTexCoord2fSGIS},
+       {"glMTexCoord2fvSGIS",           (PROC)fx_glMTexCoord2fvSGIS},
        {"wglGetExtensionsStringARB",    (PROC)wglGetExtensionsStringARB},
        {"wglGetExtensionsStringEXT",    (PROC)wglGetExtensionsStringEXT},
        {"wglSwapIntervalEXT",           (PROC)wglSwapIntervalEXT},
@@ -693,17 +829,44 @@ wglGetProcAddress(LPCSTR lpszProc)
    int i;
    PROC p;
    rgl_first_entry("wglGetProcAddress");
-   p = (PROC) _glapi_get_proc_address((const char *) lpszProc);
 
-   /* we can't BlendColor. work around buggy applications */
-   if (p && strcmp(lpszProc, "glBlendColor") && strcmp(lpszProc, "glBlendColorEXT"))
-      return p;
-
+   /* [retro3dfx] OUR table MUST be consulted BEFORE Mesa's glapi.
+    *
+    * _glapi_get_proc_address() SYNTHESIZES a dispatch stub for any unrecognised
+    * "gl*" name rather than failing, so it answers for e.g. glSelectTextureSGIS
+    * with a stub that is not wired to anything -- and the loop below, which
+    * holds the real implementation, was never reached. Quake II then called the
+    * synthesized stub the moment multitexture engaged. Found on .171
+    * (Voodoo 2) 2026-08-29: the demo1 timedemo stopped completing at all.
+    * Names we implement ourselves win; everything else still falls through to
+    * glapi exactly as before. */
    for (i = 0; wgl_ext[i].name; i++) {
        if (!strcmp(lpszProc, wgl_ext[i].name)) {
           return wgl_ext[i].func;
        }
    }
+
+   /* [retro3dfx] 0.1.78: a name glapi holds no dispatch slot for is a
+    * function this ICD does not implement - answer NULL. Asked for it,
+    * _glapi_get_proc_address() SYNTHESIZES a stub at dispatch offset ~0
+    * ("If that never happens, and the user calls this function, he'll
+    * segfault" - its own comment), and an application that trusts a
+    * non-NULL pointer calls straight into it. WON Half-Life's hw.dll does
+    * exactly that with glPNTrianglesiATI (ATI TruForm, enums 0x87F0-0x87F7),
+    * which we do not advertise: Deathmatch Classic on .124 (V5 6000,
+    * 2026-09-28) died with eip 0x010c01d9 - a heap stub - called from
+    * hw.dll+0x76d3c. Every function we do implement has an offset (the
+    * static table, or _glapi_add_entrypoint at context creation). */
+   if (_glapi_get_proc_offset((const char *) lpszProc) < 0) {
+      SetLastError(0);
+      return (NULL);
+   }
+
+   p = (PROC) _glapi_get_proc_address((const char *) lpszProc);
+
+   /* we can't BlendColor. work around buggy applications */
+   if (p && strcmp(lpszProc, "glBlendColor") && strcmp(lpszProc, "glBlendColorEXT"))
+      return p;
 
    SetLastError(0);
    return (NULL);
@@ -730,6 +893,7 @@ wglMakeCurrent(HDC hdc, HGLRC hglrc)
    hDC = hdc;
 
    fxMesaMakeCurrent(ctx);
+   fxProfStart();   /* [retro3dfx] 0.1.67: no-op unless RETROGL_PROF is set */
 
    return (TRUE);
 }
@@ -1113,6 +1277,7 @@ wglSwapBuffers(HDC hdc)
    }
 
    fxMesaSwapBuffers();
+   fxProfFrame();
 
    return (TRUE);
 }

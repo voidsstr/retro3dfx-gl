@@ -89,7 +89,11 @@ else
 endif
 
 LD = $(CC)
-LDFLAGS = -shared -Wl,--no-undefined -Wl,--enable-auto-image-base -Wl,--kill-at -Wl,-enable-stdcall-fixup
+# [retro3dfx] -static-libgcc: without it any use of a libgcc helper (64-bit
+# divide, etc.) silently adds an import on libgcc_s_dw2-1.dll, which is NOT
+# present on the retro boxes -- the ICD then fails LoadLibrary and the game
+# reports only "could not load <driver>". Cost an hour on .171 2026-08-29.
+LDFLAGS = -shared -static-libgcc -Wl,--no-undefined -Wl,--enable-auto-image-base -Wl,--kill-at -Wl,-enable-stdcall-fixup
 AR = ar
 ARFLAGS = rus
 
@@ -117,6 +121,8 @@ ifeq ($(FX),1)
 DRIVER_SOURCES = \
 	$(GLIDE_DRIVER_SOURCES) \
 	drivers/glide/fxwgl.c \
+	drivers/glide/fxicd.c \
+	drivers/glide/fxprof.c \
 	drivers/glide/fxwindow.c
 else
 ifeq ($(ICD),1)

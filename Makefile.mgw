@@ -71,7 +71,13 @@ endif
 # though the target has SSE1. -mfpmath=sse moves float math to scalar SSE
 # (doubles stay x87 - SSE1 has no doubles, fine on P3). -DNDEBUG drops assert()s
 # from the per-vertex paths. Requires CPU >= pentium3 for SSE codegen.
-CFLAGS += -O2 -ffast-math -march=$(CPU) -mtune=$(CPU) -mfpmath=sse -DNDEBUG
+# [retro3dfx] -march and -mtune were welded to one variable, so the ICD could
+# never be scheduled for the CPU that actually runs it without also raising the
+# instruction-set floor. TUNE defaults to CPU (old behaviour) and can be raised
+# on its own: .171 is a Pentium 4 but the artifact must still run on .124's
+# Pentium III, so -march stays pentium3 while -mtune becomes pentium4.
+TUNE ?= $(CPU)
+CFLAGS += -O2 -ffast-math -march=$(CPU) -mtune=$(TUNE) -mfpmath=sse -DNDEBUG
 
 export CFLAGS
 

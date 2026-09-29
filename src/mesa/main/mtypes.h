@@ -1953,6 +1953,7 @@ struct gl_extensions
    GLboolean SGI_color_table;
    GLboolean SGI_texture_color_table;
    GLboolean SGIS_generate_mipmap;
+   GLboolean SGIS_multitexture;	/* [retro3dfx] Quake II-era multitexture, opt-in */
    GLboolean SGIS_pixel_texture;
    GLboolean SGIS_texture_edge_clamp;
    GLboolean SGIS_texture_lod;

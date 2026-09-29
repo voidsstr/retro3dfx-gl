@@ -2914,8 +2914,10 @@ texture_combine( const GLcontext *ctx, GLuint unit, GLuint n,
             {
                const GLuint srcUnit = srcRGB - GL_TEXTURE0;
                ASSERT(srcUnit < ctx->Const.MaxTextureUnits);
-               if (!ctx->Texture.Unit[srcUnit]._ReallyEnabled)
+               if (!ctx->Texture.Unit[srcUnit]._ReallyEnabled) {
+                  UNDEFARRAY(ccolor);  /* [retro3dfx 0.1.66] heap in our build */
                   return;
+               }
                argRGB[j] = (const GLchan (*)[4])
                   (texelBuffer + srcUnit * (n * 4 * sizeof(GLchan)));
             }
@@ -2990,8 +2992,10 @@ texture_combine( const GLcontext *ctx, GLuint unit, GLuint n,
             {
                const GLuint srcUnit = srcA - GL_TEXTURE0;
                ASSERT(srcUnit < ctx->Const.MaxTextureUnits);
-               if (!ctx->Texture.Unit[srcUnit]._ReallyEnabled)
+               if (!ctx->Texture.Unit[srcUnit]._ReallyEnabled) {
+                  UNDEFARRAY(ccolor);  /* [retro3dfx 0.1.66] heap in our build */
                   return;
+               }
                argA[j] = (const GLchan (*)[4])
                   (texelBuffer + srcUnit * (n * 4 * sizeof(GLchan)));
             }

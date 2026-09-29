@@ -1,3 +1,7 @@
+extern unsigned long fxp_fixup, fxp_choose, fxp_begins, fxp_vsize;
+extern unsigned long long fxp_imm_cycles;
+extern int fxp_enabled;
+static unsigned long long fxp_beg_t0;
 /* $XFree86$ */
 /**************************************************************************
 
@@ -404,6 +408,7 @@ static tnl_attrfv_func do_codegen( GLcontext *ctx, GLuint attr, GLuint sz )
 
 static tnl_attrfv_func do_choose( GLuint attr, GLuint sz )
 { 
+   fxp_choose++;
    GET_CURRENT_CONTEXT( ctx ); 
    TNLcontext *tnl = TNL_CONTEXT(ctx); 
    GLuint oldsz = tnl->vtx.attrsz[attr];
@@ -416,6 +421,7 @@ static tnl_attrfv_func do_choose( GLuint attr, GLuint sz )
       if (oldsz)
 	 tnl->vtx.tabfv[attr][oldsz-1] = choose[attr][oldsz-1];
    
+      fxp_fixup++;
       _tnl_fixup_vertex( ctx, attr, sz );
  
    }
@@ -733,6 +739,17 @@ static void GLAPIENTRY _tnl_EvalPoint2( GLint i, GLint j )
  */
 static void GLAPIENTRY _tnl_Begin( GLenum mode )
 {
+   /* [retro3dfx] FX_PROFILE: per-vertex immediate-mode accumulation happens
+    * HERE, before _tnl_run_pipeline, so the pipeline timer never saw it. With
+    * two texture units the vertex is larger and every attribute goes through
+    * the tabfv function-pointer table. This is the only place left that can
+    * hold the multitexture cost. */
+   if (fxp_enabled > 0) {
+      unsigned long _l,_h;
+      __asm__ __volatile__("rdtsc":"=a"(_l),"=d"(_h));
+      fxp_beg_t0 = (((unsigned long long)_h)<<32)|_l;
+      fxp_begins++;
+   }
    GET_CURRENT_CONTEXT( ctx ); 
 
    if (ctx->Driver.CurrentExecPrimitive == GL_POLYGON+1) {
@@ -775,6 +792,14 @@ static void GLAPIENTRY _tnl_Begin( GLenum mode )
 
 static void GLAPIENTRY _tnl_End( void )
 {
+   if (fxp_enabled > 0) {
+      unsigned long _l,_h; unsigned long long _t;
+      GET_CURRENT_CONTEXT( ctx );
+      __asm__ __volatile__("rdtsc":"=a"(_l),"=d"(_h));
+      _t = (((unsigned long long)_h)<<32)|_l;
+      fxp_imm_cycles += _t - fxp_beg_t0;
+      fxp_vsize = TNL_CONTEXT(ctx)->vtx.vertex_size;
+   }
    GET_CURRENT_CONTEXT( ctx ); 
 
    if (ctx->Driver.CurrentExecPrimitive != GL_POLYGON+1) {

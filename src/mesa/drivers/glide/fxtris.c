@@ -1450,7 +1450,26 @@ static void fxRunPipeline( GLcontext *ctx )
 
    fxMesa->new_gl_state = 0;
 
-   _tnl_run_pipeline( ctx );
+   /* [retro3dfx] FX_PROFILE=1: the multitexture cost is flat against
+    * resolution and is NOT per-surface state (only 2 setup calls/frame), so
+    * time the TNL pipeline itself and count the vertices going through it. */
+   {
+      extern int fxp_enabled;
+      extern unsigned long fxp_pipeline_runs, fxp_verts;
+      extern unsigned long long fxp_pipeline_cycles;
+      if (fxp_enabled > 0) {
+         unsigned long lo0, hi0, lo1, hi1;
+         __asm__ __volatile__("rdtsc" : "=a"(lo0), "=d"(hi0));
+         _tnl_run_pipeline( ctx );
+         __asm__ __volatile__("rdtsc" : "=a"(lo1), "=d"(hi1));
+         fxp_pipeline_cycles += (((unsigned long long)hi1 << 32) | lo1)
+                              - (((unsigned long long)hi0 << 32) | lo0);
+         fxp_pipeline_runs++;
+         fxp_verts += TNL_CONTEXT(ctx)->vb.Count;
+      } else {
+         _tnl_run_pipeline( ctx );
+      }
+   }
 }
 
 

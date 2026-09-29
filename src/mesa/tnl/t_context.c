@@ -83,6 +83,10 @@ _tnl_CreateContext( GLcontext *ctx )
    }
 
    if (getenv("MESA_CODEGEN"))
+      /* [retro3dfx] Mesa ships x86 vertex codegen OFF unless MESA_CODEGEN is
+       * set; measured on .171 (Voodoo 2, Q2 demo1) it is worth nothing either
+       * way -- 57.1 vs 57.2 fps single-textured, 30.2 vs 30.5 multitextured.
+       * Left at upstream's default; do not re-litigate without new evidence. */
       tnl->AllowCodegen = GL_TRUE;
 
    /* Initialize the VB.

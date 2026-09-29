@@ -1,6 +1,23 @@
 LIBRARY OpenGL32
 DESCRIPTION "Mesa 5.1"
 EXPORTS
+ DrvCopyContext
+ DrvCreateContext
+ DrvCreateLayerContext
+ DrvDeleteContext
+ DrvDescribeLayerPlane
+ DrvDescribePixelFormat
+ DrvGetLayerPaletteEntries
+ DrvGetProcAddress
+ DrvRealizeLayerPalette
+ DrvReleaseContext
+ DrvSetContext
+ DrvSetLayerPaletteEntries
+ DrvSetPixelFormat
+ DrvShareLists
+ DrvSwapBuffers
+ DrvSwapLayerBuffers
+ DrvValidateVersion
  glAccum
  glActiveStencilFaceEXT
  glActiveTexture

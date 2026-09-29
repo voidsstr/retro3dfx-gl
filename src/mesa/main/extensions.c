@@ -50,6 +50,13 @@ static const struct {
    { OFF, "GL_ARB_imaging",                    F(ARB_imaging) },
    { OFF, "GL_ARB_multisample",                F(ARB_multisample) },
    { OFF, "GL_ARB_multitexture",               F(ARB_multitexture) },
+   /* Quake II (1997) predates ARB_multitexture and probes ONLY for the older
+    * SGIS name. Mesa 6.2 dropped SGIS_multitexture, so a Q2 that sees only the
+    * ARB string silently falls back to TWO-PASS lightmapping -- measured on the
+    * Voodoo 2 box .171 as 51.0 fps vs the stock 3dfx MiniGL 91.1 fps. SGIS is a
+    * strict subset of ARB, so gate it on the SAME flag (the GL_ARB_point_parameters
+    * row above already reuses another extension's flag this way). */
+   { OFF, "GL_SGIS_multitexture",              F(SGIS_multitexture) },
    { OFF, "GL_ARB_occlusion_query",            F(ARB_occlusion_query) },
    { OFF, "GL_ARB_point_parameters",           F(EXT_point_parameters) },
    { OFF, "GL_ARB_point_sprite",               F(ARB_point_sprite) },

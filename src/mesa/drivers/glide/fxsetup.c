@@ -60,7 +60,37 @@ static struct {
    struct { FxU32 mode, blend; } sh_mip[2];
    struct { FxU32 addr, mask, sm, lg, ar, fmt; } sh_src[2];
    struct { FxU32 f, fac, l, o, inv; } sh_acomb, sh_ccomb;
+   /* [retro3dfx 0.1.48] grTexCombine was NOT shadowed. On a 2-TMU part it
+    * is issued TWICE per texture bind and each call runs Glide's full
+    * _grRebuildDataList. Measured on .171 (Voodoo 2): enabling
+    * multitexture cut per-pixel fill by 65% but added ~22ms of fixed
+    * per-frame CPU, which is where it went. */
+   struct { FxU32 rf, rfac, af, afac, rinv, ainv; } sh_tcomb[2];
 } fxShadow;
+
+/* [retro3dfx] FX_PROFILE=1 per-frame instrumentation.
+ * Enabling multitexture on the Voodoo 2 cut per-pixel fill 65% but added ~22ms
+ * of FIXED per-frame CPU. Four guesses (texture thrashing, the
+ * ClientActiveTexture array flush, per-vertex texcoord submission, redundant
+ * grTexCombine) were each measured and refuted, so: count and time it instead. */
+unsigned long fxp_setup_calls, fxp_dbl_calls, fxp_single_calls;
+unsigned long fxp_texcomb_issued, fxp_texcomb_skipped;
+unsigned long fxp_texsource_issued;
+unsigned long long fxp_setup_cycles;
+int fxp_enabled = -1;
+unsigned long fxp_pipeline_runs, fxp_verts;
+unsigned long long fxp_swap_cycles;
+unsigned long fxp_fixup, fxp_choose, fxp_begins, fxp_vsize;
+unsigned long long fxp_imm_cycles;
+unsigned long long fxp_pipeline_cycles;
+
+static __inline unsigned long long fxp_rdtsc(void)
+{
+   unsigned long lo, hi;
+   __asm__ __volatile__("rdtsc" : "=a"(lo), "=d"(hi));
+   return ((unsigned long long)hi << 32) | lo;
+}
+
 
 void fxSetupShadowReset(void)
 {
@@ -96,6 +126,27 @@ static void fx_sh_grTexMipMapMode(GrChipID_t tmu, GrMipMapMode_t mode,
       return;
    if (tmu < 2) { fxShadow.sh_mip[tmu].mode = mode; fxShadow.sh_mip[tmu].blend = blend; }
    grTexMipMapMode(tmu, mode, blend);
+}
+
+static void fx_sh_grTexCombine(GrChipID_t tmu,
+                               GrCombineFunction_t rf, GrCombineFactor_t rfac,
+                               GrCombineFunction_t af, GrCombineFactor_t afac,
+                               FxBool rinv, FxBool ainv)
+{
+   if (tmu < 2 && fxShadow.sh_tcomb[tmu].rf   == (FxU32)rf
+               && fxShadow.sh_tcomb[tmu].rfac == (FxU32)rfac
+               && fxShadow.sh_tcomb[tmu].af   == (FxU32)af
+               && fxShadow.sh_tcomb[tmu].afac == (FxU32)afac
+               && fxShadow.sh_tcomb[tmu].rinv == (FxU32)rinv
+               && fxShadow.sh_tcomb[tmu].ainv == (FxU32)ainv)
+   { fxp_texcomb_skipped++; return; }
+   if (tmu < 2) {
+      fxShadow.sh_tcomb[tmu].rf   = rf;   fxShadow.sh_tcomb[tmu].rfac = rfac;
+      fxShadow.sh_tcomb[tmu].af   = af;   fxShadow.sh_tcomb[tmu].afac = afac;
+      fxShadow.sh_tcomb[tmu].rinv = rinv; fxShadow.sh_tcomb[tmu].ainv = ainv;
+   }
+   fxp_texcomb_issued++;
+   grTexCombine(tmu, rf, rfac, af, afac, rinv, ainv);
 }
 
 static void fx_sh_grTexSource(GrChipID_t tmu, FxU32 startAddress,
@@ -626,7 +677,7 @@ fxSelectSingleTMUSrc_NoLock(fxMesaContext fxMesa, GLint tmu, FxBool LODblend)
       }
    }
 
-   grTexCombine(GR_TMU0,
+   fx_sh_grTexCombine(GR_TMU0,
                 tex0.FunctionRGB,
                 tex0.FactorRGB,
                 tex0.FunctionAlpha,
@@ -634,7 +685,7 @@ fxSelectSingleTMUSrc_NoLock(fxMesaContext fxMesa, GLint tmu, FxBool LODblend)
                 tex0.InvertRGB,
                 tex0.InvertAlpha);
    if (fxMesa->haveTwoTMUs) {
-      grTexCombine(GR_TMU1,
+      fx_sh_grTexCombine(GR_TMU1,
                    tex1.FunctionRGB,
                    tex1.FactorRGB,
                    tex1.FunctionAlpha,
@@ -647,6 +698,7 @@ fxSelectSingleTMUSrc_NoLock(fxMesaContext fxMesa, GLint tmu, FxBool LODblend)
 static void
 fxSetupTextureSingleTMU_NoLock(GLcontext * ctx, GLuint textureset)
 {
+   fxp_single_calls++;
    fxMesaContext fxMesa = FX_CONTEXT(ctx);
    struct tdfx_combine alphaComb, colorComb;
    GrCombineLocal_t localc, locala;
@@ -1024,6 +1076,7 @@ fxSetupDoubleTMU_NoLock(fxMesaContext fxMesa,
 static void
 fxSetupTextureDoubleTMU_NoLock(GLcontext * ctx)
 {
+   fxp_dbl_calls++;
    fxMesaContext fxMesa = FX_CONTEXT(ctx);
    struct tdfx_combine alphaComb, colorComb;
    struct tdfx_texcombine tex0, tex1;
@@ -1339,14 +1392,14 @@ fxSetupTextureDoubleTMU_NoLock(GLcontext * ctx)
                   colorComb.Local,
                   colorComb.Other,
                   colorComb.Invert);
-   grTexCombine(GR_TMU0,
+   fx_sh_grTexCombine(GR_TMU0,
                 tex0.FunctionRGB,
                 tex0.FactorRGB,
                 tex0.FunctionAlpha,
                 tex0.FactorAlpha,
                 tex0.InvertRGB,
                 tex0.InvertAlpha);
-   grTexCombine(GR_TMU1,
+   fx_sh_grTexCombine(GR_TMU1,
                 tex1.FunctionRGB,
                 tex1.FactorRGB,
                 tex1.FunctionAlpha,
@@ -1447,9 +1500,14 @@ fxSetupTexture_NoLock(GLcontext * ctx)
 void
 fxSetupTexture(GLcontext * ctx)
 {
+   unsigned long long fxp_t0 = fxp_enabled > 0 ? fxp_rdtsc() : 0;
    BEGIN_BOARD_LOCK();
    fxSetupTexture_NoLock(ctx);
    END_BOARD_LOCK();
+   if (fxp_enabled > 0) {
+      fxp_setup_cycles += fxp_rdtsc() - fxp_t0;
+      fxp_setup_calls++;
+   }
 }
 
 /************************************************************************/

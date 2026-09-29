@@ -1596,8 +1596,26 @@ fxDDTexSubImage2D(GLcontext * ctx, GLenum target, GLint level,
       }
    }
 
-   if (ti->validated && ti->isInTM && !texObj->GenerateMipmap)
-      fxTMReloadMipMapLevel(fxMesa, texObj, level);
+   if (ti->validated && ti->isInTM && !texObj->GenerateMipmap) {
+      /* [retro3dfx] 0.1.71: send only the rows this call changed. A full
+       * level per glTexSubImage2D was Quake II's single-pass lightmap wall
+       * (see fxTMReloadSubMipMapLevel). A rescaled or compressed level keeps
+       * the full reload: its rows do not map 1:1 onto the caller's. The
+       * env FX_FULL_TEXSUB=1 restores the old behaviour for A/B. */
+      static int fullTexSub = -1;
+      if (fullTexSub < 0)
+         fullTexSub = getenv("FX_FULL_TEXSUB") != NULL;
+      if (!fullTexSub && !texImage->IsCompressed &&
+          mml->wScale == 1 && mml->hScale == 1 && height > 0) {
+         /* 0.1.74: a patch narrower than the level goes as sub-rows when
+          * this Glide has the fixed row extension; else whole rows */
+         if (width >= mml->width ||
+             !fxTMReloadSubRect(fxMesa, texObj, level, xoffset, yoffset, width, height))
+            fxTMReloadSubMipMapLevel(fxMesa, texObj, level, yoffset, height);
+      }
+      else
+         fxTMReloadMipMapLevel(fxMesa, texObj, level);
+   }
    else
       fxTexInvalidate(ctx, texObj);
 }

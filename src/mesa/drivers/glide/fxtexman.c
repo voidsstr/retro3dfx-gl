@@ -41,6 +41,7 @@
 #if defined(FX)
 
 #include "fxdrv.h"
+#include <string.h>
 
 int texSwaps = 0;
 static FxU32 texBoundMask;
@@ -617,6 +618,22 @@ fxTMReloadMipMapLevel(fxMesaContext fxMesa, struct gl_texture_object *tObj,
    }
 }
 
+/* [retro3dfx] 0.1.71: download only the rows glTexSubImage2D changed.
+ *
+ * Until 0.1.71 nothing called this: fxDDTexSubImage2D re-sent the WHOLE mip
+ * level for every sub-image update. Quake II's single-pass
+ * (GL_SGIS_multitexture) path updates a dynamic lightmap with one small
+ * glTexSubImage2D per lit surface per frame, so each one re-sent a 128x128
+ * 32-bit page (64 KB, twice when the page sits on both TMUs) through the
+ * command FIFO: 55 % of all CPU time on the V5 6000 (ICD profiler, 0.1.67),
+ * the "fixed CPU wall" that made multitexture 4x SLOWER than two-pass.
+ *
+ * The body mirrors fxTMReloadMipMapLevel, which works: the Glide3 LOD
+ * (largeLodLog2 - (level - minLevel)), the same TMU cases and masks. The old
+ * body had never run and was wrong twice over: a Glide2-era LOD formula, and
+ * a first-row pointer computed in 16-bit units - half the real offset for a
+ * 32-bit texture. Glide's download procs read the data pointer AS row `t`
+ * (xtexdl_def.c), so it must point at the first row sent, in bytes. */
 void
 fxTMReloadSubMipMapLevel(fxMesaContext fxMesa,
 			 struct gl_texture_object *tObj,
@@ -624,12 +641,14 @@ fxTMReloadSubMipMapLevel(fxMesaContext fxMesa,
 {
    tfxTexInfo *ti = fxTMGetTexInfo(tObj);
    GrLOD_t lodlevel;
-   unsigned short *data;
    GLint tmu;
    struct gl_texture_image *texImage = tObj->Image[0][level];
    tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
+   GLubyte *data;
+   const int first = yoffset, last = yoffset + height - 1;
 
    assert(mml);
+   assert(ti->isInTM);
 
    if (!ti->validated) {
       fprintf(stderr, "fxTMReloadSubMipMapLevel: INTERNAL ERROR: not validated\n");
@@ -638,78 +657,131 @@ fxTMReloadSubMipMapLevel(fxMesaContext fxMesa,
    }
 
    tmu = (int) ti->whichTMU;
-   fxTMMoveInTM(fxMesa, tObj, tmu);
+   fxMesa->stats.reqTexUpload++;
+   fxMesa->stats.texUpload++;
 
-   fxTexGetInfo(mml->width, mml->height,
-		&lodlevel, NULL, NULL, NULL, NULL, NULL);
-
-   if ((ti->info.format == GR_TEXFMT_INTENSITY_8) ||
-       (ti->info.format == GR_TEXFMT_P_8) ||
-       (ti->info.format == GR_TEXFMT_ALPHA_8))
-	 data = (GLushort *) texImage->Data + ((yoffset * mml->width) >> 1);
-   else
-      data = (GLushort *) texImage->Data + yoffset * mml->width;
+   lodlevel = ti->info.largeLodLog2 - (level - ti->minLevel);
+   data = (GLubyte *) texImage->Data
+        + (GLuint) yoffset * (GLuint) mml->width * texImage->TexFormat->TexelBytes;
 
    switch (tmu) {
    case FX_TMU0:
    case FX_TMU1:
-      grTexDownloadMipMapLevelPartial(tmu,
-					 ti->tm[tmu]->startAddr,
-					 FX_valueToLod(FX_lodToValue(lodlevel)
-						       + level),
-					 FX_largeLodLog2(ti->info),
-					 FX_aspectRatioLog2(ti->info),
-					 ti->info.format,
-					 GR_MIPMAPLEVELMASK_BOTH, data,
-					 yoffset, yoffset + height - 1);
+      grTexDownloadMipMapLevelPartial(tmu, ti->tm[tmu]->startAddr, lodlevel,
+				      FX_largeLodLog2(ti->info), FX_aspectRatioLog2(ti->info),
+				      ti->info.format, GR_MIPMAPLEVELMASK_BOTH,
+				      data, first, last);
       break;
    case FX_TMU_SPLIT:
-      grTexDownloadMipMapLevelPartial(GR_TMU0,
-					 ti->tm[FX_TMU0]->startAddr,
-					 FX_valueToLod(FX_lodToValue(lodlevel)
-						       + level),
-					 FX_largeLodLog2(ti->info),
-					 FX_aspectRatioLog2(ti->info),
-					 ti->info.format,
-					 GR_MIPMAPLEVELMASK_ODD, data,
-					 yoffset, yoffset + height - 1);
-
-      grTexDownloadMipMapLevelPartial(GR_TMU1,
-					 ti->tm[FX_TMU1]->startAddr,
-					 FX_valueToLod(FX_lodToValue(lodlevel)
-						       + level),
-					 FX_largeLodLog2(ti->info),
-					 FX_aspectRatioLog2(ti->info),
-					 ti->info.format,
-					 GR_MIPMAPLEVELMASK_EVEN, data,
-					 yoffset, yoffset + height - 1);
+      grTexDownloadMipMapLevelPartial(GR_TMU0, ti->tm[GR_TMU0]->startAddr, lodlevel,
+				      FX_largeLodLog2(ti->info), FX_aspectRatioLog2(ti->info),
+				      ti->info.format, GR_MIPMAPLEVELMASK_ODD,
+				      data, first, last);
+      grTexDownloadMipMapLevelPartial(GR_TMU1, ti->tm[GR_TMU1]->startAddr, lodlevel,
+				      FX_largeLodLog2(ti->info), FX_aspectRatioLog2(ti->info),
+				      ti->info.format, GR_MIPMAPLEVELMASK_EVEN,
+				      data, first, last);
       break;
    case FX_TMU_BOTH:
-      grTexDownloadMipMapLevelPartial(GR_TMU0,
-					 ti->tm[FX_TMU0]->startAddr,
-					 FX_valueToLod(FX_lodToValue(lodlevel)
-						       + level),
-					 FX_largeLodLog2(ti->info),
-					 FX_aspectRatioLog2(ti->info),
-					 ti->info.format,
-					 GR_MIPMAPLEVELMASK_BOTH, data,
-					 yoffset, yoffset + height - 1);
-
-      grTexDownloadMipMapLevelPartial(GR_TMU1,
-					 ti->tm[FX_TMU1]->startAddr,
-					 FX_valueToLod(FX_lodToValue(lodlevel)
-						       + level),
-					 FX_largeLodLog2(ti->info),
-					 FX_aspectRatioLog2(ti->info),
-					 ti->info.format,
-					 GR_MIPMAPLEVELMASK_BOTH, data,
-					 yoffset, yoffset + height - 1);
+      grTexDownloadMipMapLevelPartial(GR_TMU0, ti->tm[GR_TMU0]->startAddr, lodlevel,
+				      FX_largeLodLog2(ti->info), FX_aspectRatioLog2(ti->info),
+				      ti->info.format, GR_MIPMAPLEVELMASK_BOTH,
+				      data, first, last);
+      grTexDownloadMipMapLevelPartial(GR_TMU1, ti->tm[GR_TMU1]->startAddr, lodlevel,
+				      FX_largeLodLog2(ti->info), FX_aspectRatioLog2(ti->info),
+				      ti->info.format, GR_MIPMAPLEVELMASK_BOTH,
+				      data, first, last);
       break;
    default:
       fprintf(stderr, "fxTMReloadSubMipMapLevel: INTERNAL ERROR: wrong tmu (%d)\n", tmu);
       fxCloseHardware();
       exit(-1);
    }
+}
+
+/* [retro3dfx] 0.1.74: a sub-row patch goes as sub-rows. Glide's partial
+ * download is row-granular, so a 16x16 lightmap patch on a 128-wide page
+ * still sent 16 whole rows - 8x the texels that changed; that was 9 % of a
+ * single-pass Quake II frame after 0.1.71. grTexDownloadMipMapLevelPartialRowExt
+ * sends one row between two columns, but its min_s alignment is broken in the
+ * 3dfx source (`min_s &= 2` for 32-bit keeps one bit), so it is used ONLY on a
+ * Glide that advertises RETRO3DFX_PARTIALROW - our h5 fork, which fixed it.
+ * FX_NO_PARTIALROW=1 disables it. The ext is stdcall, like every Glide entry. */
+typedef FxBool (FX_CALL *fxPartialRowProc)(GrChipID_t, FxU32, GrLOD_t, GrLOD_t,
+                                           GrAspectRatio_t, GrTextureFormat_t,
+                                           FxU32, void *, int, int, int);
+
+static fxPartialRowProc
+fxPartialRowExt(void)
+{
+   static int state = -1;
+   static fxPartialRowProc fn = NULL;
+   if (state < 0) {
+      const char *ext = grGetString(GR_EXTENSION);
+      state = 0;
+      if (ext && strstr(ext, " RETRO3DFX_PARTIALROW ") && !getenv("FX_NO_PARTIALROW")) {
+         fn = (fxPartialRowProc) grGetProcAddress("grTexDownloadMipMapLevelPartialRowExt");
+         state = (fn != NULL);
+      }
+   }
+   return state ? fn : NULL;
+}
+
+/* Returns GL_FALSE when the rect cannot go as sub-rows (no fixed ext on this
+ * Glide); the caller then sends whole rows. */
+GLboolean
+fxTMReloadSubRect(fxMesaContext fxMesa, struct gl_texture_object *tObj,
+                  GLint level, GLint xoffset, GLint yoffset,
+                  GLint width, GLint height)
+{
+   fxPartialRowProc row = fxPartialRowExt();
+   tfxTexInfo *ti = fxTMGetTexInfo(tObj);
+   struct gl_texture_image *texImage = tObj->Image[0][level];
+   tfxMipMapLevel *mml = FX_MIPMAP_DATA(texImage);
+   const GLuint pitch = (GLuint) mml->width * texImage->TexFormat->TexelBytes;
+   GrLOD_t lodlevel;
+   GLint t, tmu;
+
+   if (!row || !ti->validated || !ti->isInTM)
+      return GL_FALSE;
+
+   tmu = (int) ti->whichTMU;
+   fxMesa->stats.reqTexUpload++;
+   fxMesa->stats.texUpload++;
+   lodlevel = ti->info.largeLodLog2 - (level - ti->minLevel);
+
+   for (t = yoffset; t < yoffset + height; t++) {
+      /* the ext takes the START of row t and offsets to min_s itself */
+      GLubyte *rowData = (GLubyte *) texImage->Data + (GLuint) t * pitch;
+      const int s0 = xoffset, s1 = xoffset + width - 1;
+      switch (tmu) {
+      case FX_TMU0:
+      case FX_TMU1:
+         row(tmu, ti->tm[tmu]->startAddr, lodlevel, FX_largeLodLog2(ti->info),
+             FX_aspectRatioLog2(ti->info), ti->info.format,
+             GR_MIPMAPLEVELMASK_BOTH, rowData, t, s0, s1);
+         break;
+      case FX_TMU_SPLIT:
+         row(GR_TMU0, ti->tm[GR_TMU0]->startAddr, lodlevel, FX_largeLodLog2(ti->info),
+             FX_aspectRatioLog2(ti->info), ti->info.format,
+             GR_MIPMAPLEVELMASK_ODD, rowData, t, s0, s1);
+         row(GR_TMU1, ti->tm[GR_TMU1]->startAddr, lodlevel, FX_largeLodLog2(ti->info),
+             FX_aspectRatioLog2(ti->info), ti->info.format,
+             GR_MIPMAPLEVELMASK_EVEN, rowData, t, s0, s1);
+         break;
+      case FX_TMU_BOTH:
+         row(GR_TMU0, ti->tm[GR_TMU0]->startAddr, lodlevel, FX_largeLodLog2(ti->info),
+             FX_aspectRatioLog2(ti->info), ti->info.format,
+             GR_MIPMAPLEVELMASK_BOTH, rowData, t, s0, s1);
+         row(GR_TMU1, ti->tm[GR_TMU1]->startAddr, lodlevel, FX_largeLodLog2(ti->info),
+             FX_aspectRatioLog2(ti->info), ti->info.format,
+             GR_MIPMAPLEVELMASK_BOTH, rowData, t, s0, s1);
+         break;
+      default:
+         return GL_FALSE;
+      }
+   }
+   return GL_TRUE;
 }
 
 void

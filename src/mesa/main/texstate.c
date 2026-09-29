@@ -2666,6 +2666,25 @@ _mesa_GetTexGeniv( GLenum coord, GLenum pname, GLint *params )
 #endif
 
 /* GL_ARB_multitexture */
+/* [retro3dfx] 0.1.73: selecting a texture unit changes no rendering state -
+ * it only decides which unit LATER texture calls address, and every one of
+ * those that does change state (bind, env, parameters, enables) flushes for
+ * itself. Stock Mesa flushed the buffered vertices on every unit switch
+ * anyway, and Quake II's single-pass (SGIS multitexture) path switches units
+ * twice per surface: each surface became its own trip through the whole TNL
+ * pipeline, with the immediate-mode vertex format rebuilt from scratch
+ * (_tnl_wrap_upgrade_vertex, 6 % of a frame on the V5 6000 against 0.8 %
+ * two-pass). Mark the state dirty instead, so surfaces that share a texture
+ * and a lightmap page batch. MESA_NO_LAZY_UNIT_SELECT=1 restores the flush. */
+static int
+lazy_unit_select(void)
+{
+   static int lazy = -1;
+   if (lazy < 0)
+      lazy = _mesa_getenv("MESA_NO_LAZY_UNIT_SELECT") == NULL;
+   return lazy;
+}
+
 void GLAPIENTRY
 _mesa_ActiveTextureARB( GLenum target )
 {
@@ -2686,7 +2705,10 @@ _mesa_ActiveTextureARB( GLenum target )
    if (ctx->Texture.CurrentUnit == texUnit)
       return;
 
-   FLUSH_VERTICES(ctx, _NEW_TEXTURE);
+   if (lazy_unit_select())
+      ctx->NewState |= _NEW_TEXTURE;
+   else
+      FLUSH_VERTICES(ctx, _NEW_TEXTURE);
 
    ctx->Texture.CurrentUnit = texUnit;
    if (ctx->Transform.MatrixMode == GL_TEXTURE) {
@@ -2713,7 +2735,14 @@ _mesa_ClientActiveTextureARB( GLenum target )
       return;
    }
 
-   FLUSH_VERTICES(ctx, _NEW_ARRAY);
+   if (lazy_unit_select()) {
+      /* the client unit only routes LATER glTexCoordPointer-style calls */
+      if (ctx->Array.ActiveTexture == texUnit)
+         return;
+      ctx->NewState |= _NEW_ARRAY;
+   }
+   else
+      FLUSH_VERTICES(ctx, _NEW_ARRAY);
    ctx->Array.ActiveTexture = texUnit;
 }
 

@@ -143,7 +143,16 @@ extern "C" {
 #  define DEFMNARRAY(TYPE,NAME,SIZE1,SIZE2,SIZE3)	TYPE (*NAME)[SIZE2][SIZE3] = (TYPE(*)[SIZE2][SIZE3])_mesa_alloc(sizeof(TYPE)*(SIZE1)*(SIZE2)*(SIZE3))
 #  define CHECKARRAY(NAME,CMD)				do {if (!(NAME)) {CMD;}} while (0)
 #  define UNDEFARRAY(NAME)          			do {if ((NAME)) {_mesa_free((char*)NAME);}  }while (0)
-#elif defined(__BEOS__)
+#elif defined(__BEOS__) || (defined(FX) && defined(__WIN32__))
+/* [retro3dfx 0.1.66] Our Win32 FX ICD takes the heap variant too. The stack
+ * variant made _mesa_unpack_color_span_chan (and its pack/float siblings) an
+ * 80 KB stack frame (MAX_WIDTH 4096 x 4 floats + indexes); a Quake II-engine
+ * game already holds ~768 KB of texture scratch on its 1 MB main-thread stack
+ * when it calls glTexImage2D, so SiN Gold died of a stack overflow in
+ * ___chkstk_ms under fxDDTexImage2D -> _mesa_texstore_argb8888 ->
+ * _mesa_make_temp_chan_image -> _mesa_unpack_color_span_chan (Dr Watson,
+ * .124, 2026-09-24). Every DEF*ARRAY site is paired with UNDEFARRAY on each
+ * exit (checked; the two s_texture.c crossbar returns were fixed with this). */
 #  define DEFARRAY(TYPE,NAME,SIZE)  			TYPE *NAME = (TYPE*)_mesa_malloc(sizeof(TYPE)*(SIZE))
 #  define DEFMARRAY(TYPE,NAME,SIZE1,SIZE2)  		TYPE (*NAME)[SIZE2] = (TYPE(*)[SIZE2])_mesa_malloc(sizeof(TYPE)*(SIZE1)*(SIZE2))
 #  define DEFMNARRAY(TYPE,NAME,SIZE1,SIZE2,SIZE3)	TYPE (*NAME)[SIZE2][SIZE3] = (TYPE(*)[SIZE2][SIZE3])_mesa_malloc(sizeof(TYPE)*(SIZE1)*(SIZE2)*(SIZE3))

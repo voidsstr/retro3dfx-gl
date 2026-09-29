@@ -566,6 +566,9 @@ extern GrContext_t fxWinOpen(fxMesaContext fxMesa, FxU32 hWnd, int w, int h, int
 extern void fxWinSwap(fxMesaContext fxMesa);
 extern void fxWinClose(fxMesaContext fxMesa);
 extern void fxMesaRequestWindowed(int w, int h);  /* fxapi.c; set before create */
+/* [retro3dfx] 0.1.77: tell WGL_3DFX_gamma_control which ramp the ICD itself
+ * just loaded, so wglGetDeviceGammaRamp3DFX reports the DAC, not zeros */
+extern void fxWglNoteGamma(int n, const FxU32 *r, const FxU32 *g, const FxU32 *b);
 #endif
 extern void fxSetupDDPointers(GLcontext *);
 
@@ -678,6 +681,8 @@ extern void fxTMMoveOutTM(fxMesaContext, struct gl_texture_object *);
 extern void fxTMFreeTexture(fxMesaContext, struct gl_texture_object *);
 extern void fxTMReloadMipMapLevel(fxMesaContext, struct gl_texture_object *,
 				  GLint);
+extern GLboolean fxTMReloadSubRect(fxMesaContext, struct gl_texture_object *,
+                                   GLint, GLint, GLint, GLint, GLint);
 extern void fxTMReloadSubMipMapLevel(fxMesaContext,
 				     struct gl_texture_object *, GLint, GLint,
 				     GLint);
@@ -787,5 +792,10 @@ extern int TDFX_DEBUG;
 /* dirty hacks */
 #define FX_RESCALE_BIG_TEXURES_HACK   1
 #define FX_COMPRESS_S3TC_AS_FXT1_HACK 1
+
+/* [retro3dfx] 0.1.67 fxprof.c: opt-in render-thread sampler (RETROGL_PROF) */
+extern void fxProfStart(void);
+extern void fxProfFrame(void);
+extern void fxProfStop(void);
 
 #endif
