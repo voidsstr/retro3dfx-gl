@@ -80,6 +80,7 @@ DRV HGLRC APIENTRY DrvCreateLayerContext(HDC hdc, int layer)
 
 DRV BOOL APIENTRY DrvDeleteContext(HGLRC rc)
 {
+   rgl_sync("ICD: DrvDeleteContext(rc=%p) at swap %lu", (void *) rc, rgl_swaps);
    return wglDeleteContext(rc);
 }
 
@@ -100,6 +101,7 @@ DRV PICDTABLE APIENTRY DrvSetContext(HDC hdc, HGLRC rc, void *callback)
 DRV BOOL APIENTRY DrvReleaseContext(HGLRC rc)
 {
    (void) rc;
+   rgl_sync("ICD: DrvReleaseContext at swap %lu", rgl_swaps);
    return wglMakeCurrent(NULL, NULL);
 }
 

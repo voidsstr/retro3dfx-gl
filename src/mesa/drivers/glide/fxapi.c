@@ -936,7 +936,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.78]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.79]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -1067,6 +1067,9 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
    if (!fxMesa)
       return;
 
+   /* [retro3dfx 0.1.79] QUIT-TRACE (fxrlog.h) */
+   rgl_sync("fxMesaDestroyContext: enter at swap %lu", rgl_swaps);
+
    if (fxMesa->verbose) {
       fprintf(stderr, "Misc Stats:\n");
       fprintf(stderr, "  # swap buffer: %u\n", fxMesa->stats.swapBuffer);
@@ -1129,9 +1132,11 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
       inc = 256 / n;
       for (i = 0, idx = 0; i < n; i++, idx += inc)
          rr[i] = gg[i] = bb[i] = (FxU32)idx;
+      rgl_sync("fxMesaDestroyContext: identity gamma grLoadGammaTable(%d) ->", n);
       BEGIN_BOARD_LOCK();
       grLoadGammaTable(n, rr, gg, bb);
       END_BOARD_LOCK();
+      rgl_sync("fxMesaDestroyContext: identity gamma returned");
 #if defined(__WIN32__)
       fxWglNoteGamma(n, rr, gg, bb);    /* 0.1.77: identity is back in the DAC */
 #endif
@@ -1145,6 +1150,8 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
     * 10 s later), and a force-kill is what leaves the display driver's stale
     * per-PID slot behind; a log line per step names the step that stops. */
    rgl_log("fxMesaDestroyContext: closing board (windowed=%d)", (int) fxMesa->windowed);
+   rgl_sync("fxMesaDestroyContext: closing board (windowed=%d) -> grSstWinClose",
+            (int) fxMesa->windowed);
 #if defined(__WIN32__)
    if (fxMesa->windowed)
       fxWinClose(fxMesa);   /* grSurfaceReleaseContext + release DDraw surfaces */
@@ -1152,6 +1159,7 @@ fxMesaDestroyContext(fxMesaContext fxMesa)
 #endif
       grSstWinClose(fxMesa->glideContext);
    rgl_log("fxMesaDestroyContext: board closed; fxCloseHardware");
+   rgl_sync("fxMesaDestroyContext: board closed -> fxCloseHardware");
    fxCloseHardware();
 
    fxDDDestroyFxMesaContext(fxMesa); /* must be before _mesa_destroy_context */
@@ -1330,7 +1338,9 @@ fxCloseHardware(void)
 	  * restores the old shutdown-on-last-context behaviour for A/B testing. */
 	 if (glbProcessExiting || getenv("FX_GLIDE_SHUTDOWN")) {
 	    rgl_log("fxCloseHardware: grGlideShutdown()");
+	    rgl_sync("fxCloseHardware: grGlideShutdown ->");
 	    grGlideShutdown();
+	    rgl_sync("fxCloseHardware: grGlideShutdown returned");
 	    rgl_log("fxCloseHardware: grGlideShutdown returned");
 	    glbGlideInitialized = 0;
 	 }

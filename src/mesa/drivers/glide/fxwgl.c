@@ -58,6 +58,37 @@ extern "C"
 #include "fxdrv.h"
 #include "fxrlog.h"   /* [retro3dfx] C:\retrogl.log context-creation tracer */
 
+/* [retro3dfx 0.1.79] QUIT-TRACE state (fxrlog.h), and wrappers for fxdd.c /
+ * fxddtex.c, which do not include windows.h */
+unsigned long rgl_swaps;
+int rgl_armed;
+
+void
+rgl_sync_x(const char *fmt, ...)
+{
+   char buf[512];
+   va_list ap;
+   if (!rgl_sync_level())
+      return;
+   va_start(ap, fmt);
+   _vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+   va_end(ap);
+   buf[sizeof(buf) - 1] = 0;
+   rgl_sync("%s", buf);
+}
+
+void
+rgl_maybe_arm_x(const char *why)
+{
+   rgl_maybe_arm(why);
+}
+
+int
+rgl_sync_level_x(void)
+{
+   return rgl_sync_level();
+}
+
 #define MAX_MESA_ATTRS  20
 
 #if (_MSC_VER >= 1200)
@@ -524,8 +555,10 @@ wglDeleteContext(HGLRC hglrc)
 {
    if (ctx && hglrc == (HGLRC) 1) {
       rgl_log("wglDeleteContext: enter");
+      rgl_sync("wglDeleteContext: enter at swap %lu -> fxMesaDestroyContext", rgl_swaps);
 
       fxMesaDestroyContext(ctx);
+      rgl_sync("wglDeleteContext: fxMesaDestroyContext returned");
 
       SetWindowLong(WindowFromDC(hDC), GWL_WNDPROC, (LONG) hWNDOldProc);
 
@@ -618,7 +651,10 @@ wglSetDeviceGammaRamp3DFX (HDC hdc, LPVOID arrays)
      gammaTableB[i] = blue[index] >> 8;
  }
 
+ rgl_sync("wglSetDeviceGammaRamp3DFX at swap %lu: grLoadGammaTable(%d) ->", rgl_swaps,
+          (int) tableSize);
  grLoadGammaTable(tableSize, gammaTableR, gammaTableG, gammaTableB);
+ rgl_sync("wglSetDeviceGammaRamp3DFX: grLoadGammaTable returned");
 
  return TRUE;
 }
@@ -882,8 +918,10 @@ wglGetDefaultProcAddress(LPCSTR lpszProc)
 GLAPI BOOL GLAPIENTRY
 wglMakeCurrent(HDC hdc, HGLRC hglrc)
 {
-   if ((hdc == NULL) && (hglrc == NULL))
+   if ((hdc == NULL) && (hglrc == NULL)) {
+      rgl_sync("wglMakeCurrent(NULL, NULL) at swap %lu (nothing to do)", rgl_swaps);
       return (TRUE);
+   }
 
    if (!ctx || hglrc != (HGLRC) 1 || WindowFromDC(hdc) != hWND) {
       SetLastError(0);
@@ -1276,7 +1314,17 @@ wglSwapBuffers(HDC hdc)
       return (FALSE);
    }
 
-   fxMesaSwapBuffers();
+   rgl_swaps++;
+   {
+      /* [retro3dfx 0.1.79] QUIT-TRACE: every swap when armed or at level 2,
+       * else one line per 300 */
+      const int each = rgl_sync_level() >= 2 || rgl_armed;
+      if (each || (rgl_sync_level() && rgl_swaps % 300 == 0))
+         rgl_sync("swap %lu -> fxMesaSwapBuffers", rgl_swaps);
+      fxMesaSwapBuffers();
+      if (each)
+         rgl_sync("swap %lu done", rgl_swaps);
+   }
    fxProfFrame();
 
    return (TRUE);

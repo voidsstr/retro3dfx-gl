@@ -449,6 +449,16 @@ fxDDTexParam(GLcontext * ctx, GLenum target, struct gl_texture_object *tObj,
    }
 }
 
+/* [retro3dfx 0.1.79] QUIT-TRACE (fxrlog.h; defined in fxwgl.c - this file
+ * does not include windows.h) */
+extern unsigned long rgl_swaps;
+extern int rgl_armed;
+extern void rgl_sync_x(const char *fmt, ...);
+extern void rgl_maybe_arm_x(const char *why);
+extern int rgl_sync_level_x(void);
+
+static unsigned long rgl_texdels;
+
 void
 fxDDTexDel(GLcontext * ctx, struct gl_texture_object *tObj)
 {
@@ -462,6 +472,12 @@ fxDDTexDel(GLcontext * ctx, struct gl_texture_object *tObj)
    if (!ti)
       return;
 
+   /* [retro3dfx 0.1.79] QUIT-TRACE: a quit deletes hundreds - the first four,
+    * then one in 32, and every one once armed */
+   rgl_texdels++;
+   if (rgl_sync_level_x() && (rgl_armed || rgl_texdels <= 4 || rgl_texdels % 32 == 0))
+      rgl_sync_x("texdel #%lu (name %u) at swap %lu -> fxTMFreeTexture", rgl_texdels,
+                 (unsigned) tObj->Name, rgl_swaps);
    fxTMFreeTexture(fxMesa, tObj);
 
    FREE(ti);
@@ -587,6 +603,8 @@ fxDDTexPalette(GLcontext * ctx, struct gl_texture_object *tObj)
          tObj->DriverData = fxAllocTexObjData(fxMesa);
       ti = fxTMGetTexInfo(tObj);
       ti->paltype = convertPalette(fxMesa, ti->palette.data, &tObj->Palette);
+      if (rgl_armed)
+         rgl_sync_x("palette(texture %u) at swap %lu", (unsigned) tObj->Name, rgl_swaps);
       fxTexInvalidate(ctx, tObj);
    }
    else {
@@ -597,7 +615,13 @@ fxDDTexPalette(GLcontext * ctx, struct gl_texture_object *tObj)
       fxMesa->glbPalType = convertPalette(fxMesa, fxMesa->glbPalette.data, &ctx->Texture.Palette);
       fxMesa->new_state |= FX_NEW_TEXTURING;
 
+      /* [retro3dfx 0.1.79] QUIT-TRACE: Quake II resets the shared palette in
+       * CL_Disconnect, i.e. at quit - a late one arms the per-swap log */
+      rgl_maybe_arm_x("a global palette download");
+      rgl_sync_x("palette(global) at swap %lu: grTexDownloadTable(type %d) ->", rgl_swaps,
+                 (int) fxMesa->glbPalType);
       grTexDownloadTable(fxMesa->glbPalType, &(fxMesa->glbPalette));
+      rgl_sync_x("palette(global): grTexDownloadTable returned");
    }
 }
 

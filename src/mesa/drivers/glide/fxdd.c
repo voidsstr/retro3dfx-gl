@@ -145,7 +145,16 @@ fxDDClearColor(GLcontext * ctx, const GLfloat color[4])
 
 
 /* Clear the color and/or depth buffers */
-static void fxDDClear( GLcontext *ctx,
+
+/* [retro3dfx 0.1.79] QUIT-TRACE (fxrlog.h; defined in fxwgl.c - this file
+ * does not include windows.h) */
+extern unsigned long rgl_swaps;
+extern int rgl_armed;
+extern void rgl_sync_x(const char *fmt, ...);
+extern void rgl_maybe_arm_x(const char *why);
+extern int rgl_sync_level_x(void);
+
+static void fxDDClear_impl( GLcontext *ctx,
 			GLbitfield mask, GLboolean all,
 			GLint x, GLint y, GLint width, GLint height )
 {
@@ -1601,10 +1610,32 @@ fxDDDrawPixels8888 (GLcontext * ctx, GLint x, GLint y,
 }
 
 
+/* [retro3dfx 0.1.79] QUIT-TRACE: a colour clear is rare in a game loop (Quake
+ * II clears only depth per frame; CL_Disconnect's R_SetPalette clears colour at
+ * quit), so each one is logged and a late one arms the per-swap log. */
+static void
+fxDDClear(GLcontext *ctx, GLbitfield mask, GLboolean all,
+          GLint x, GLint y, GLint width, GLint height)
+{
+   const int colour = (mask & (DD_FRONT_LEFT_BIT | DD_BACK_LEFT_BIT)) != 0;
+   const int log = rgl_sync_level_x() && (colour || rgl_armed);
+   if (colour)
+      rgl_maybe_arm_x("a colour clear");
+   if (log)
+      rgl_sync_x("clear mask %x at swap %lu ->", (unsigned) mask, rgl_swaps);
+   fxDDClear_impl(ctx, mask, all, x, y, width, height);
+   if (log)
+      rgl_sync_x("clear mask %x done", (unsigned) mask);
+}
+
 static void
 fxDDFinish(GLcontext * ctx)
 {
+   if (rgl_armed)
+      rgl_sync_x("glFinish at swap %lu -> grFlush", rgl_swaps);
    grFlush();
+   if (rgl_armed)
+      rgl_sync_x("glFinish: grFlush returned");
 }
 
 
