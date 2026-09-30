@@ -930,7 +930,9 @@ wglMakeCurrent(HDC hdc, HGLRC hglrc)
 
    hDC = hdc;
 
+   rgl_sync("wglMakeCurrent at swap %lu -> fxMesaMakeCurrent", rgl_swaps);
    fxMesaMakeCurrent(ctx);
+   rgl_sync("wglMakeCurrent: fxMesaMakeCurrent returned");
    fxProfStart();   /* [retro3dfx] 0.1.67: no-op unless RETROGL_PROF is set */
 
    return (TRUE);

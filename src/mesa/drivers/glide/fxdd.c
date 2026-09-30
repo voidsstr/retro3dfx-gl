@@ -1722,7 +1722,9 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
 
    fxMesa->tmuSrc = FX_TMU_NONE;
    fxMesa->lastUnitsMode = FX_UM_NONE;
+   rgl_sync_x("fxDDInitFxMesaContext: fxTMInit ->");
    fxTMInit(fxMesa);
+   rgl_sync_x("fxDDInitFxMesaContext: fxTMInit returned");
 
    /* FX units setup */
 
@@ -1845,7 +1847,11 @@ fxDDInitFxMesaContext(fxMesaContext fxMesa)
    /* do we want dither? It just looks bad... */
    grEnable(GR_ALLOW_MIPMAP_DITHER);
 #endif
+   /* [retro3dfx 0.1.80] QUIT-TRACE: grGlideGetState validates the state set
+    * above (colour mask, render buffer, depth mode, LFB format) to hardware */
+   rgl_sync_x("fxDDInitFxMesaContext: grGlideGetState (state to hw) ->");
    grGlideGetState((GrState *) fxMesa->state);
+   rgl_sync_x("fxDDInitFxMesaContext: grGlideGetState returned");
 
    return 1;
 }

@@ -876,6 +876,9 @@ fxMesaCreateContext(GLuint win,
        fxWglNoteGamma(n, rr, gg, bb);   /* 0.1.77: what Get3DFX must report */
 #endif
     }
+    /* [retro3dfx 0.1.80] QUIT-TRACE: the steps after the board open - the
+     * window in which 8x AA froze .124 (2026-09-30) */
+    rgl_sync("ctx-create: gamma loaded -> dither, renderer string, Mesa context");
     if (!getenv("FX_DITHER") || atoi(getenv("FX_DITHER")) != 0) {
        BEGIN_BOARD_LOCK();
        grDitherMode(GR_DITHER_4x4);
@@ -936,7 +939,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.79]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.80]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
@@ -972,6 +975,7 @@ fxMesaCreateContext(GLuint win,
    }
 
 
+   rgl_sync("ctx-create: Mesa context made -> fxDDInitFxMesaContext");
    if (!fxDDInitFxMesaContext(fxMesa)) {
       rgl_log("fxMesaCreateContext: BAIL -> errorhandler (fxDDInitFxMesaContext failed)");
       str = "fxDDInitFxMesaContext";
@@ -1007,6 +1011,8 @@ fxMesaCreateContext(GLuint win,
    }
 #endif
 
+   rgl_sync("ctx-create: SUCCESS (%dx%d colDepth %d)", fxMesa->screen_width, fxMesa->screen_height,
+            colDepth);
    rgl_log("fxMesaCreateContext: SUCCESS glideContext=%lu screen=%dx%d colDepth=%d windowed=%d",
            (unsigned long)fxMesa->glideContext, fxMesa->screen_width, fxMesa->screen_height,
            colDepth, (int)fxMesa->windowed);
@@ -1213,7 +1219,9 @@ fxMesaMakeCurrent(fxMesaContext fxMesa)
    fxMesaCurrentCtx = fxMesa;
 
    grSstSelect(fxMesa->board);
+   rgl_sync("fxMesaMakeCurrent: grGlideSetState -> (T-buffer mask, state to hw)");
    grGlideSetState((GrState *) fxMesa->state);
+   rgl_sync("fxMesaMakeCurrent: grGlideSetState returned");
    fxSetupShadowReset();   /* [retro3dfx] SetState rewrote the real registers */
 
    _mesa_make_current(fxMesa->glCtx, fxMesa->glBuffer);
