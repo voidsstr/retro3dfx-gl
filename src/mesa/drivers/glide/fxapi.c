@@ -448,6 +448,27 @@ fxMesaCreateBestContext(GLuint win, GLint width, GLint height,
 }
 
 
+/* [retro3dfx 0.1.82] how many colour buffers to open the board with: two,
+ * unless RETROGL_COLOR_BUFFERS=3 asks for three. 0.1.81 opened three
+ * whenever the swaps waited for the retrace, to keep an 85 Hz CRT from
+ * dropping straight to 42.5 fps when a frame misses a refresh - and it bought
+ * nothing on the V5 6000: Quake III demo four, 1280x960x32, vsync on, 55.9
+ * fps with two buffers and 56.0 with three (vsync off 65.0 / 64.7,
+ * 2026-10-02). The swap evidently still holds the command stream until the
+ * retrace, so a third buffer never gets drawn into early. Kept as an
+ * explicit switch for that investigation; the default does not spend the
+ * memory. cb = getenv("RETROGL_COLOR_BUFFERS"); si is the swap interval,
+ * no longer consulted. */
+static int
+rgl_color_buffers_for(const char *cb, const char *si)
+{
+   (void)si;
+   if (cb && (cb[0] == '2' || cb[0] == '3') && cb[1] == '\0')
+      return cb[0] - '0';
+   return 2;
+}
+
+
 /*
  * Create a new FX/Mesa context and return a handle to it.
  */
@@ -798,17 +819,20 @@ fxMesaCreateContext(GLuint win,
 #endif
  if (!fxMesa->glideContext) {
     BEGIN_BOARD_LOCK();
+    int ncol = rgl_color_buffers_for(getenv("RETROGL_COLOR_BUFFERS"),
+                                     getenv("FX_GLIDE_SWAPINTERVAL"));
     if (fxMesa->HavePixExt) {
        int rw = -1, rh = -1;
        rgl_res_dims((int)res, &rw, &rh);
        rgl_log("grSstWinOpenExt: win=%lu res=%d (%dx%d) ref=%d colorformat=%d(ABGR) "
-               "origin=%d(LOWER_LEFT) pixFmt=%d nColBuffers=2 nAuxBuffers=%d  [Napalm PIXEXT path]",
+               "origin=%d(LOWER_LEFT) pixFmt=%d nColBuffers=%d nAuxBuffers=%d  [Napalm PIXEXT path]",
                (unsigned long)win, (int)res, rw, rh, (int)ref,
-               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, (int)pixFmt, (int)(aux ? 1 : 0));
+               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, (int)pixFmt, ncol,
+               (int)(aux ? 1 : 0));
        fxMesa->glideContext = Glide->grSstWinOpenExt((FxU32)win, res, ref,
                                                      GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
                                                      pixFmt,
-                                                     2, aux);
+                                                     ncol, aux);
        rgl_log("grSstWinOpenExt: returned glideContext=%lu (0 == FAILED)",
                (unsigned long)fxMesa->glideContext);
     } else if (pixFmt == GR_PIXFMT_RGB_565) {
@@ -817,12 +841,12 @@ fxMesaCreateContext(GLuint win,
        /* THE key line: fullscreen Voodoo3 board open. These are the EXACT args
         * passed to glide3x's grSstWinOpen. */
        rgl_log("grSstWinOpen: win=%lu res=%d (%dx%d) ref=%d colorformat=%d(ABGR) "
-               "origin=%d(LOWER_LEFT) nColBuffers=2 nAuxBuffers=%d  [Voodoo3 RGB_565 fullscreen path]",
+               "origin=%d(LOWER_LEFT) nColBuffers=%d nAuxBuffers=%d  [Voodoo3 RGB_565 fullscreen path]",
                (unsigned long)win, (int)res, rw, rh, (int)ref,
-               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, (int)(aux ? 1 : 0));
+               (int)GR_COLORFORMAT_ABGR, (int)GR_ORIGIN_LOWER_LEFT, ncol, (int)(aux ? 1 : 0));
        fxMesa->glideContext = grSstWinOpen((FxU32)win, res, ref,
                                            GR_COLORFORMAT_ABGR, GR_ORIGIN_LOWER_LEFT,
-                                           2, aux);
+                                           ncol, aux);
        rgl_log("grSstWinOpen: returned glideContext=%lu (0 == FAILED)",
                (unsigned long)fxMesa->glideContext);
     } else {
@@ -939,7 +963,7 @@ fxMesaCreateContext(GLuint win,
                       fxMesa->snapVertices ? "" : "no ");
    }
 
-  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.80]",
+  sprintf(fxMesa->rendererString, "Mesa %s v0.62 %s%s [voodoo-cleanroom 0.1.82]",
           grGetString(GR_RENDERER),
           grGetString(GR_HARDWARE),
           ((fxMesa->type < GR_SSTTYPE_Voodoo4) && (voodoo->numChips > 1)) ? " SLI" : "");
