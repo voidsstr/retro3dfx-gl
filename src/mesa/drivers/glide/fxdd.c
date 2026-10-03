@@ -1651,7 +1651,7 @@ fxDDFinish(GLcontext * ctx)
  * update (.124, 2026-10-02). GL_VERSION keeps Mesa's own answer first
  * ("1.2 Mesa 6.2.2"), so a game that parses the leading major.minor reads
  * what it always read. The build script refreshes the tag in this one line. */
-static const char rgl_build_tag[] = "[voodoo-cleanroom 0.1.83]";
+static const char rgl_build_tag[] = "[voodoo-cleanroom 0.1.84]";
 
 /* KW: Put the word Mesa in the render string because quakeworld
  * checks for this rather than doing a glGet(GL_MAX_TEXTURE_SIZE).

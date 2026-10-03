@@ -387,10 +387,23 @@ wglCopyContext(HGLRC hglrcSrc, HGLRC hglrcDst, UINT mask)
    return (FALSE);
 }
 
+/* [retro3dfx 0.1.84] The window Glide opens on: the drawable itself when
+ * it is top-level, else its top-level ancestor - DirectDraw exclusive mode
+ * refuses a WS_CHILD (see wglCreateContext). */
+static HWND
+rgl_glide_window(HWND hWnd)
+{
+   HWND root;
+   if (!(GetWindowLong(hWnd, GWL_STYLE) & WS_CHILD))
+      return hWnd;
+   root = GetAncestor(hWnd, GA_ROOT);
+   return root ? root : hWnd;
+}
+
 GLAPI HGLRC GLAPIENTRY
 wglCreateContext(HDC hdc)
 {
-   HWND hWnd;
+   HWND hWnd, hGlideWnd;
    WNDPROC oldProc;
    int error;
 
@@ -518,10 +531,26 @@ wglCreateContext(HDC hdc)
            fprintf(stderr, "[retro3dfx] pre create hWnd=%p cliRect=%ldx%ld style=%lx attr0=%d\n",
                    (void*)hWnd, (long)cliRect.right, (long)cliRect.bottom,
                    (unsigned long)GetWindowLong(hWnd, GWL_STYLE), (int)pix[curPFD-1].mesaAttr[0]);
+        /* [retro3dfx 0.1.84] Glide takes the screen with DirectDraw EXCLUSIVE
+         * mode, and SetCooperativeLevel(DDSCL_EXCLUSIVE|DDSCL_FULLSCREEN)
+         * accepts only a TOP-LEVEL window: on a WS_CHILD it answers
+         * DDERR_INVALIDPARAMS (0x80070057) and grSstWinOpen fails with an
+         * empty "non-fatal" error. A game may draw into a child of its own
+         * window - Serious Sam TFE does with ogl_bExclusive=0 (style
+         * 0x56000000; .124, 2026-10-03) - and then made no context at all.
+         * Glide gets the drawable's top-level ancestor, which is also the
+         * window that receives the WM_ACTIVATEAPP Glide's alt-tab handling
+         * watches; the size above, the subclassing and hWND stay the
+         * drawable's own. */
+        hGlideWnd = rgl_glide_window(hWnd);
+        if (hGlideWnd != hWnd)
+           rgl_log("wglCreateContext: drawable %p is a WS_CHILD (style %08lx) -> Glide gets its "
+                   "top-level window %p", (void *)hWnd, (unsigned long)GetWindowLong(hWnd, GWL_STYLE),
+                   (void *)hGlideWnd);
         rgl_log("wglCreateContext: -> fxMesaCreateBestContext(win=%p, %ldx%ld, mesaAttr[colDepth=%d])",
-                (void *)hWnd, (long)cliRect.right, (long)cliRect.bottom,
+                (void *)hGlideWnd, (long)cliRect.right, (long)cliRect.bottom,
                 (int)pix[curPFD - 1].mesaAttr[1]);
-        error = !(ctx = fxMesaCreateBestContext((GLuint) hWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
+        error = !(ctx = fxMesaCreateBestContext((GLuint) hGlideWnd, cliRect.right, cliRect.bottom, pix[curPFD - 1].mesaAttr));
         rgl_log("wglCreateContext: fxMesaCreateBestContext returned ctx=%p (error=%d)", (void *)ctx, error);
         if (TDFX_DEBUG & VERBOSE_DRIVER)
            fprintf(stderr, "[retro3dfx] post create ctx=%p\n", (void*)ctx);
