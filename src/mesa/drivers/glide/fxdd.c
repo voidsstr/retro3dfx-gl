@@ -43,6 +43,7 @@
 #include "image.h"
 #include "mtypes.h"
 #include "fxdrv.h"
+#include "get.h"
 #include "enums.h"
 #include "extensions.h"
 #include "macros.h"
@@ -1642,6 +1643,16 @@ fxDDFinish(GLcontext * ctx)
 
 
 
+/* voodoo-cleanroom 0.1.83: the driver's build tag lives in GL_VERSION, not
+ * GL_RENDERER. id Tech 3 (r_lastValidRenderer) and Torque
+ * ($pref::Video::profiledRenderer) remember the renderer string and drop to
+ * their low graphics preset when it changes, so a build number in it reset
+ * Quake III, RtCW, SoF II, Jedi Academy and Tribes 2 after every driver
+ * update (.124, 2026-10-02). GL_VERSION keeps Mesa's own answer first
+ * ("1.2 Mesa 6.2.2"), so a game that parses the leading major.minor reads
+ * what it always read. The build script refreshes the tag in this one line. */
+static const char rgl_build_tag[] = "[voodoo-cleanroom 0.1.83]";
+
 /* KW: Put the word Mesa in the render string because quakeworld
  * checks for this rather than doing a glGet(GL_MAX_TEXTURE_SIZE).
  * Why?
@@ -1654,6 +1665,21 @@ fxDDGetString(GLcontext * ctx, GLenum name)
  switch (name) {
         case GL_RENDERER:
              return (GLubyte *)fxMesa->rendererString;
+        case GL_VERSION: {
+             static GLubyte version[96];
+             static int asking;
+             if (asking)
+                return NULL;           /* Mesa's own answer, from the call below */
+             if (!version[0]) {
+                const GLubyte *v;
+                asking = 1;
+                v = _mesa_GetString(GL_VERSION);
+                asking = 0;
+                _mesa_sprintf((char *)version, "%s %s",
+                              v ? (const char *)v : "1.2", rgl_build_tag);
+             }
+             return version;
+        }
 #if __WIN32__ /* hack to advertise vanilla extension names */
         case GL_EXTENSIONS:
              if (ctx->Extensions.String == NULL) {
